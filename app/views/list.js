@@ -1,10 +1,12 @@
 import { html, render } from 'lit-html';
 import { createListSelectors } from '../data/list-selectors.js';
 import { cmpClosedDesc } from '../data/sort.js';
+import { createIssueIdRenderer } from '../utils/issue-id-renderer.js';
 import { ISSUE_TYPES, typeLabel } from '../utils/issue-type.js';
 import { issueHashFor } from '../utils/issue-url.js';
 import { debug } from '../utils/logging.js';
 import { statusLabel } from '../utils/status.js';
+import { createTypeBadge } from '../utils/type-badge.js';
 import { createIssueRowRenderer } from './issue-row.js';
 
 // List view implementation; requires a transport send function.
@@ -213,6 +215,203 @@ export function createListView(
   const selectors = issue_stores ? createListSelectors(issue_stores) : null;
 
   /**
+   * Look up counters for an epic from the tab:epics snapshot.
+   * Returns {total: 0, closed: 0} if the epic isn't in the snapshot yet
+   * (race condition during initial load — progress bar will update on
+   * the next push when tab:epics arrives).
+   *
+   * @param {string} epic_id
+   */
+  function getEpicCounters(epic_id) {
+    if (!issue_stores || typeof issue_stores.snapshotFor !== 'function') {
+      return { total: 0, closed: 0 };
+    }
+    const arr = issue_stores.snapshotFor('tab:epics') || [];
+    const meta = arr.find((e) => String(e?.id || '') === String(epic_id));
+    if (!meta) return { total: 0, closed: 0 };
+    return {
+      total: Number(/** @type {any} */ (meta).total_children || 0),
+      closed: Number(/** @type {any} */ (meta).closed_children || 0)
+    };
+  }
+
+  /**
+   * Partition the (filtered ∪ expanded-epics) list into:
+   *  - epic_rows: items with issue_type === 'epic' (rendered with header + optional children)
+   *  - top_level_rows: non-epic items WHOSE PARENT IS NOT IN epic_ids
+   *  - (children of epics in epic_ids are rendered inline under their epic when expanded)
+   *
+   * Recovers any expanded epic that the filter excluded — expanded epics
+   * always render so their (possibly-matching) children remain reachable.
+   *
+   * @param {Issue[]} filtered - Items that passed the top-level filter
+   * @param {Issue[]} all - The full issues_cache (used to recover expanded-but-filtered epics)
+   */
+  function partitionForTree(filtered, all) {
+    const filtered_ids = new Set(filtered.map((it) => String(it.id)));
+    /** @type {Issue[]} */
+    const recovered = [];
+    for (const ep of all) {
+      if (String(ep.issue_type || '') !== 'epic') continue;
+      const id = String(ep.id);
+      if (expanded.has(id) && !filtered_ids.has(id)) {
+        recovered.push(ep);
+      }
+    }
+    const effective = filtered.concat(recovered);
+
+    const epic_ids = new Set(
+      effective
+        .filter((it) => String(it.issue_type || '') === 'epic')
+        .map((it) => String(it.id))
+    );
+    /** @type {Issue[]} */
+    const epic_rows = [];
+    /** @type {Issue[]} */
+    const top_level_rows = [];
+    for (const it of effective) {
+      const is_epic = String(it.issue_type || '') === 'epic';
+      if (is_epic) {
+        epic_rows.push(it);
+        continue;
+      }
+      const parent = String(/** @type {any} */ (it).parent || '');
+      if (parent && epic_ids.has(parent)) {
+        continue; // Hidden — will appear under its epic if expanded
+      }
+      top_level_rows.push(it);
+    }
+    return { epic_rows, top_level_rows, epic_ids };
+  }
+
+  /**
+   * Apply current filters to a list of issues (used for child filtering).
+   *
+   * Intentionally narrower than the top-level filter:
+   *  - No 'ready' branch — 'ready' is a top-level membership concept, not a per-row predicate.
+   *    Children inherit visibility from their epic's filter pass.
+   *  - No closed-sort branch — children sort within their parent epic; closed-only sort
+   *    is a list-level concern, not a child concern.
+   *
+   * @param {Issue[]} list
+   */
+  function applyFiltersToIssues(list) {
+    let out = list;
+    if (status_filters.length > 0 && !status_filters.includes('ready')) {
+      out = out.filter((it) =>
+        status_filters.includes(String(it.status || ''))
+      );
+    }
+    if (search_text) {
+      const needle = search_text.toLowerCase();
+      out = out.filter((it) => {
+        const a = String(it.id).toLowerCase();
+        const b = String(it.title || '').toLowerCase();
+        return a.includes(needle) || b.includes(needle);
+      });
+    }
+    if (type_filters.length > 0) {
+      out = out.filter((it) =>
+        type_filters.includes(String(it.issue_type || ''))
+      );
+    }
+    return out;
+  }
+
+  /**
+   * Render an epic row with chevron, progress bar, and standard row cells.
+   *
+   * @param {Issue} it
+   */
+  function renderEpicRow(it) {
+    const id = String(it.id);
+    const is_open = expanded.has(id);
+    const { total, closed } = getEpicCounters(id);
+    return html`
+      <tr
+        class="issue-row epic-row-inline"
+        data-issue-id=${id}
+        data-epic-id=${id}
+        role="row"
+      >
+        <td role="gridcell" class="mono">${createIssueIdRenderer(id)}</td>
+        <td role="gridcell">${createTypeBadge(it.issue_type)}</td>
+        <td role="gridcell">
+          <div
+            class="epic-header"
+            role="button"
+            tabindex="0"
+            aria-expanded=${is_open ? 'true' : 'false'}
+            @click=${
+              /** @param {Event} ev */ (ev) => {
+                ev.stopPropagation();
+                void toggleEpic(id);
+              }
+            }
+            @keydown=${
+              /** @param {KeyboardEvent} ev */ (ev) => {
+                if (ev.key === 'Enter' || ev.key === ' ') {
+                  ev.preventDefault();
+                  void toggleEpic(id);
+                }
+              }
+            }
+          >
+            <span class="epic-chevron">${is_open ? '▾' : '▸'}</span>
+            <span class="text-truncate" style="margin-left:6px"
+              >${it.title || ''}</span
+            >
+            <span
+              class="epic-progress"
+              style="margin-left:auto; display:flex; align-items:center; gap:6px;"
+            >
+              <progress value=${closed} max=${Math.max(1, total)}></progress>
+              <span class="muted mono">${closed}/${total}</span>
+            </span>
+          </div>
+        </td>
+        <td role="gridcell">${statusLabel(String(it.status || 'open'))}</td>
+        <td role="gridcell">${it.assignee || ''}</td>
+        <td role="gridcell"></td>
+        <td role="gridcell"></td>
+      </tr>
+    `;
+  }
+
+  /**
+   * Render a child row beneath its expanded epic (read-only display for v1).
+   *
+   * @param {Issue} it
+   */
+  function renderChildRow(it) {
+    return html`<tr
+      role="row"
+      class="issue-row epic-child-row"
+      data-issue-id=${it.id}
+      data-epic-child="true"
+      @click=${
+        /** @param {Event} ev */ (ev) => {
+          const el = /** @type {HTMLElement|null} */ (ev.target);
+          if (el && (el.tagName === 'INPUT' || el.tagName === 'SELECT')) return;
+          const nav = navigateFn || ((h) => (window.location.hash = h));
+          const view = store ? store.getState().view : 'issues';
+          nav(issueHashFor(view, it.id));
+        }
+      }
+    >
+      <td role="gridcell" class="mono">${createIssueIdRenderer(it.id)}</td>
+      <td role="gridcell">${createTypeBadge(it.issue_type)}</td>
+      <td role="gridcell">
+        <span class="text-truncate">${it.title || ''}</span>
+      </td>
+      <td role="gridcell">${statusLabel(String(it.status || 'open'))}</td>
+      <td role="gridcell">${it.assignee || ''}</td>
+      <td role="gridcell">P${it.priority ?? 2}</td>
+      <td role="gridcell"></td>
+    </tr>`;
+  }
+
+  /**
    * Build lit-html template for the list view.
    */
   function template() {
@@ -238,6 +437,43 @@ export function createListView(
     // Sorting: closed list is a special case → sort by closed_at desc only
     if (status_filters.length === 1 && status_filters[0] === 'closed') {
       filtered = filtered.slice().sort(cmpClosedDesc);
+    }
+
+    const { epic_rows, top_level_rows } = partitionForTree(
+      filtered,
+      issues_cache
+    );
+
+    // Merge epics and non-epic top-level rows by the existing priority/created sort.
+    const merged = [...epic_rows, ...top_level_rows].sort((a, b) => {
+      const pa = a.priority ?? 2;
+      const pb = b.priority ?? 2;
+      if (pa !== pb) return pa - pb;
+      const ca = /** @type {any} */ (a).created_at ?? 0;
+      const cb = /** @type {any} */ (b).created_at ?? 0;
+      if (ca !== cb) return ca < cb ? -1 : 1;
+      return String(a.id) < String(b.id) ? -1 : 1;
+    });
+
+    /** @type {import('lit-html').TemplateResult<1>[]} */
+    const rows_array = [];
+    for (const it of merged) {
+      if (String(it.issue_type || '') === 'epic') {
+        rows_array.push(renderEpicRow(it));
+        if (expanded.has(String(it.id))) {
+          const children = selectors
+            ? selectors.selectEpicChildren(String(it.id))
+            : [];
+          const filtered_children = applyFiltersToIssues(
+            /** @type {Issue[]} */ (children)
+          );
+          for (const child of filtered_children) {
+            rows_array.push(renderChildRow(child));
+          }
+        }
+      } else {
+        rows_array.push(row_renderer(it));
+      }
     }
 
     return html`
@@ -293,7 +529,7 @@ export function createListView(
         />
       </div>
       <div class="panel__body" id="list-root">
-        ${filtered.length === 0
+        ${rows_array.length === 0
           ? html`<div class="issues-block">
               <div class="muted" style="padding:10px 12px;">No issues</div>
             </div>`
@@ -301,7 +537,7 @@ export function createListView(
               <table
                 class="table"
                 role="grid"
-                aria-rowcount=${String(filtered.length)}
+                aria-rowcount=${String(rows_array.length)}
                 aria-colcount="6"
               >
                 <colgroup>
@@ -325,7 +561,7 @@ export function createListView(
                   </tr>
                 </thead>
                 <tbody role="rowgroup">
-                  ${filtered.map((it) => row_renderer(it))}
+                  ${rows_array}
                 </tbody>
               </table>
             </div>`}
@@ -376,7 +612,6 @@ export function createListView(
    *
    * @param {string} epic_id
    */
-  // eslint-disable-next-line no-unused-vars
   async function toggleEpic(epic_id) {
     if (!expanded.has(epic_id)) {
       expanded.add(epic_id);

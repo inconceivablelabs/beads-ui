@@ -1170,6 +1170,26 @@ input.inline-edit:focus {
 .epic-children {
   padding: 8px 12px 12px;
 }
+
+/* In-table epic layout: epic-header lives inside a <td>, not a panel */
+.epic-row-inline .epic-header {
+  padding: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.epic-child-row td:first-child {
+  padding-left: 24px;
+}
+
+.epic-chevron {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+  user-select: none;
+}
 .table {
   width: 100%;
   border-collapse: collapse;
