@@ -20,7 +20,10 @@ import { createIssueRowRenderer } from './issue-row.js';
  * @param {(type: string, payload?: unknown) => Promise<unknown>} sendFn - RPC transport.
  * @param {(hash: string) => void} [navigate_fn] - Navigation function (defaults to setting location.hash).
  * @param {{ getState: () => any, setState: (patch: any) => void, subscribe: (fn: (s:any)=>void)=>()=>void }} [store] - Optional state store.
- * @param {{ selectors: { getIds: (client_id: string) => string[] } }} [_subscriptions]
+ * @param {{
+ *   selectors?: { getIds?: (client_id: string) => string[] },
+ *   subscribeList?: (client_id: string, spec: { type: string, params?: Record<string, string|number|boolean> }) => Promise<() => Promise<void>>
+ * }} [subscriptions]
  * @param {{ snapshotFor?: (client_id: string) => any[], subscribe?: (fn: () => void) => () => void }} [issueStores]
  * @returns {{ load: () => Promise<void>, destroy: () => void }} View API.
  */
@@ -31,7 +34,10 @@ import { createIssueRowRenderer } from './issue-row.js';
  * @param {(type: string, payload?: unknown) => Promise<unknown>} sendFn
  * @param {(hash: string) => void} [navigateFn]
  * @param {{ getState: () => any, setState: (patch: any) => void, subscribe: (fn: (s:any)=>void)=>()=>void }} [store]
- * @param {{ selectors: { getIds: (client_id: string) => string[] } }} [_subscriptions]
+ * @param {{
+ *   selectors?: { getIds?: (client_id: string) => string[] },
+ *   subscribeList?: (client_id: string, spec: { type: string, params?: Record<string, string|number|boolean> }) => Promise<() => Promise<void>>
+ * }} [subscriptions]
  * @param {{ snapshotFor?: (client_id: string) => any[], subscribe?: (fn: () => void) => () => void }} [issue_stores]
  * @returns {{ load: () => Promise<void>, destroy: () => void }}
  */
@@ -40,12 +46,10 @@ export function createListView(
   sendFn,
   navigateFn,
   store,
-  _subscriptions = undefined,
+  subscriptions = undefined,
   issue_stores = undefined
 ) {
   const log = debug('views:list');
-  // Touch unused param to satisfy lint rules without impacting behavior
-  /** @type {any} */ (void _subscriptions);
   /** @type {string[]} */
   let status_filters = [];
   /** @type {string} */
@@ -56,6 +60,12 @@ export function createListView(
   let type_filters = [];
   /** @type {string | null} */
   let selected_id = store ? store.getState().selected_id : null;
+  /** @type {Set<string>} */
+  const expanded = new Set();
+  /** @type {Set<string>} */
+  const loading = new Set();
+  /** @type {Map<string, () => Promise<void>>} */
+  const epic_unsubs = new Map();
   /** @type {null | (() => void)} */
   let unsubscribe = null;
   let status_dropdown_open = false;
@@ -362,6 +372,63 @@ export function createListView(
   }
 
   /**
+   * Toggle expanded state for an epic row.
+   *
+   * @param {string} epic_id
+   */
+  // eslint-disable-next-line no-unused-vars
+  async function toggleEpic(epic_id) {
+    if (!expanded.has(epic_id)) {
+      expanded.add(epic_id);
+      loading.add(epic_id);
+      doRender();
+      if (
+        subscriptions &&
+        typeof (/** @type {any} */ (subscriptions).subscribeList) === 'function'
+      ) {
+        try {
+          if (issue_stores && /** @type {any} */ (issue_stores).register) {
+            /** @type {any} */ (issue_stores).register(`detail:${epic_id}`, {
+              type: 'issue-detail',
+              params: { id: epic_id }
+            });
+          }
+          const u = await /** @type {any} */ (subscriptions).subscribeList(
+            `detail:${epic_id}`,
+            {
+              type: 'issue-detail',
+              params: { id: epic_id }
+            }
+          );
+          epic_unsubs.set(epic_id, u);
+        } catch {
+          // ignore subscription failures
+        }
+      }
+      loading.delete(epic_id);
+    } else {
+      expanded.delete(epic_id);
+      const u = epic_unsubs.get(epic_id);
+      if (u) {
+        try {
+          await u();
+        } catch {
+          /* ignore */
+        }
+        epic_unsubs.delete(epic_id);
+      }
+      if (issue_stores && /** @type {any} */ (issue_stores).unregister) {
+        try {
+          /** @type {any} */ (issue_stores).unregister(`detail:${epic_id}`);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    doRender();
+  }
+
+  /**
    * Load issues from local push stores and re-render.
    */
   async function load() {
@@ -575,6 +642,15 @@ export function createListView(
   return {
     load,
     destroy() {
+      for (const u of epic_unsubs.values()) {
+        try {
+          void u();
+        } catch {
+          /* ignore */
+        }
+      }
+      epic_unsubs.clear();
+      expanded.clear();
       mount_element.replaceChildren();
       document.removeEventListener('click', clickOutsideHandler);
       if (unsubscribe) {
