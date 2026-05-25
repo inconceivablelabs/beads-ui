@@ -754,6 +754,76 @@ describe('views/list', () => {
     expect(header?.getAttribute('aria-expanded')).toBe('true');
   });
 
+  test('clicking epic header twice collapses (toggle is bidirectional)', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const stores = createTestIssueStores();
+    stores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues: [
+        {
+          id: 'X-1',
+          title: 'Epic A',
+          status: 'open',
+          priority: 1,
+          issue_type: 'epic'
+        }
+      ]
+    });
+    stores.getStore('tab:epics').applyPush({
+      type: 'snapshot',
+      id: 'tab:epics',
+      revision: 1,
+      issues: [{ id: 'X-1', total_children: 1, closed_children: 0 }]
+    });
+    // Seed children so the expand path has something to render.
+    stores.getStore('detail:X-1').applyPush({
+      type: 'snapshot',
+      id: 'detail:X-1',
+      revision: 1,
+      issues: [
+        {
+          id: 'X-1',
+          dependents: [
+            {
+              id: 'X-2',
+              title: 'child',
+              status: 'open',
+              priority: 2,
+              issue_type: 'task'
+            }
+          ]
+        }
+      ]
+    });
+    const view = createListView(
+      mount,
+      async () => null,
+      () => {},
+      undefined,
+      undefined,
+      stores
+    );
+    await view.load();
+
+    const header = mount.querySelector('[data-epic-id="X-1"] .epic-header');
+    expect(header).toBeTruthy();
+
+    // Click 1: expand
+    /** @type {HTMLElement} */ (header).click();
+    await Promise.resolve();
+    expect(header?.getAttribute('aria-expanded')).toBe('true');
+
+    // Click 2: collapse
+    /** @type {HTMLElement} */ (header).click();
+    await Promise.resolve();
+    expect(header?.getAttribute('aria-expanded')).toBe('false');
+    // Child row no longer in DOM after collapse
+    expect(mount.querySelector('[data-issue-id="X-2"]')).toBeFalsy();
+  });
+
   test('epic row renders progress bar and hides child duplicates', async () => {
     document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
     const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));

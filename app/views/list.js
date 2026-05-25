@@ -372,7 +372,7 @@ export function createListView(
         </td>
         <td role="gridcell">${statusLabel(String(it.status || 'open'))}</td>
         <td role="gridcell">${it.assignee || ''}</td>
-        <td role="gridcell"></td>
+        <td role="gridcell">P${it.priority ?? 2}</td>
         <td role="gridcell"></td>
       </tr>
     `;
