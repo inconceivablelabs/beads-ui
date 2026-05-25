@@ -935,4 +935,177 @@ describe('views/list', () => {
     await Promise.resolve();
     expect(mount.querySelectorAll('tr.issue-row').length).toBe(2);
   });
+
+  test('status filter applies to expanded children (expanded epic persists)', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const stores = createTestIssueStores();
+    // Epic is open — would be filtered out by 'Closed' filter without the
+    // expanded-epics-always-render rule. Test exercises both child filtering
+    // AND the expanded-epic recovery branch in partitionForTree.
+    stores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues: [
+        {
+          id: 'X-EPIC',
+          title: 'Epic',
+          status: 'open',
+          priority: 1,
+          issue_type: 'epic'
+        }
+      ]
+    });
+    stores.getStore('tab:epics').applyPush({
+      type: 'snapshot',
+      id: 'tab:epics',
+      revision: 1,
+      issues: [{ id: 'X-EPIC', total_children: 2, closed_children: 1 }]
+    });
+    // Seed children into the epic's detail store
+    // (selectEpicChildren reads `detail:${id}` and returns the entry whose id === epic_id, .dependents)
+    stores.getStore('detail:X-EPIC').applyPush({
+      type: 'snapshot',
+      id: 'detail:X-EPIC',
+      revision: 1,
+      issues: [
+        {
+          id: 'X-EPIC',
+          dependents: [
+            {
+              id: 'X-2',
+              title: 'open child',
+              status: 'open',
+              priority: 2,
+              issue_type: 'task'
+            },
+            {
+              id: 'X-3',
+              title: 'closed child',
+              status: 'closed',
+              priority: 2,
+              issue_type: 'task'
+            }
+          ]
+        }
+      ]
+    });
+    const view = createListView(
+      mount,
+      async () => null,
+      () => {},
+      undefined,
+      undefined,
+      stores
+    );
+    await view.load();
+
+    // Expand the epic
+    /** @type {HTMLElement} */ (
+      mount.querySelector('[data-epic-id="X-EPIC"] .epic-header')
+    ).click();
+    await Promise.resolve();
+
+    // Both children visible initially
+    expect(mount.querySelector('[data-issue-id="X-2"]')).toBeTruthy();
+    expect(mount.querySelector('[data-issue-id="X-3"]')).toBeTruthy();
+
+    // Apply Closed filter
+    toggleFilter(mount, 0, 'Closed');
+    await Promise.resolve();
+
+    // Epic should still render (expanded epics always render — Key Decision)
+    expect(mount.querySelector('[data-epic-id="X-EPIC"]')).toBeTruthy();
+    // Open child hidden, closed child visible
+    expect(mount.querySelector('[data-issue-id="X-2"]')).toBeFalsy();
+    expect(mount.querySelector('[data-issue-id="X-3"]')).toBeTruthy();
+  });
+
+  test('non-expanded epic filtered out hides entirely (top-level filter still works)', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const stores = createTestIssueStores();
+    stores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues: [
+        {
+          id: 'X-EPIC',
+          title: 'Epic',
+          status: 'open',
+          priority: 1,
+          issue_type: 'epic'
+        },
+        {
+          id: 'X-5',
+          title: 'closed task',
+          status: 'closed',
+          priority: 2,
+          issue_type: 'task'
+        }
+      ]
+    });
+    stores.getStore('tab:epics').applyPush({
+      type: 'snapshot',
+      id: 'tab:epics',
+      revision: 1,
+      issues: [{ id: 'X-EPIC', total_children: 1, closed_children: 0 }]
+    });
+    const view = createListView(
+      mount,
+      async () => null,
+      () => {},
+      undefined,
+      undefined,
+      stores
+    );
+    await view.load();
+
+    // Apply Closed filter — open epic was never expanded, so should be filtered out
+    toggleFilter(mount, 0, 'Closed');
+    await Promise.resolve();
+
+    expect(mount.querySelector('[data-epic-id="X-EPIC"]')).toBeFalsy();
+    expect(mount.querySelector('[data-issue-id="X-5"]')).toBeTruthy();
+  });
+
+  test('no auto-expand on initial load', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const stores = createTestIssueStores();
+    stores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues: [
+        {
+          id: 'X-EPIC',
+          title: 'E',
+          status: 'open',
+          priority: 1,
+          issue_type: 'epic'
+        }
+      ]
+    });
+    stores.getStore('tab:epics').applyPush({
+      type: 'snapshot',
+      id: 'tab:epics',
+      revision: 1,
+      issues: [{ id: 'X-EPIC', total_children: 1, closed_children: 0 }]
+    });
+    const view = createListView(
+      mount,
+      async () => null,
+      () => {},
+      undefined,
+      undefined,
+      stores
+    );
+    await view.load();
+
+    const header = mount.querySelector('[data-epic-id="X-EPIC"] .epic-header');
+    expect(header?.getAttribute('aria-expanded')).toBe('false');
+  });
 });
