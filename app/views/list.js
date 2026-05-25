@@ -1,12 +1,10 @@
 import { html, render } from 'lit-html';
 import { createListSelectors } from '../data/list-selectors.js';
 import { cmpClosedDesc } from '../data/sort.js';
-import { createIssueIdRenderer } from '../utils/issue-id-renderer.js';
 import { ISSUE_TYPES, typeLabel } from '../utils/issue-type.js';
 import { issueHashFor } from '../utils/issue-url.js';
 import { debug } from '../utils/logging.js';
 import { statusLabel } from '../utils/status.js';
-import { createTypeBadge } from '../utils/type-badge.js';
 import { createIssueRowRenderer } from './issue-row.js';
 
 // List view implementation; requires a transport send function.
@@ -97,18 +95,82 @@ export function createListView(
     return [];
   }
 
-  // Shared row renderer (used in template below)
+  /**
+   * Build navigate handler shared by all three row renderers.
+   *
+   * @param {string} id
+   */
+  function navigateToIssue(id) {
+    const nav = navigateFn || ((h) => (window.location.hash = h));
+    /** @type {'issues'|'epics'|'board'} */
+    const view = store ? store.getState().view : 'issues';
+    nav(issueHashFor(view, id));
+  }
+
+  // Shared row renderer for non-epic top-level rows
   const row_renderer = createIssueRowRenderer({
-    navigate: (id) => {
-      const nav = navigateFn || ((h) => (window.location.hash = h));
-      /** @type {'issues'|'epics'|'board'} */
-      const view = store ? store.getState().view : 'issues';
-      nav(issueHashFor(view, id));
-    },
+    navigate: navigateToIssue,
     onUpdate: updateInline,
     requestRender: doRender,
     getSelectedId: () => selected_id,
     row_class: 'issue-row'
+  });
+
+  // Child rows are canonical rows with an extra class for visual differentiation
+  const child_row_renderer = createIssueRowRenderer({
+    navigate: navigateToIssue,
+    onUpdate: updateInline,
+    requestRender: doRender,
+    getSelectedId: () => selected_id,
+    row_class: 'issue-row epic-child-row'
+  });
+
+  // Epic rows use the canonical pipeline but inject a custom title cell
+  // (chevron + title text + progress bar). Only the chevron toggles expand.
+  const epic_row_renderer = createIssueRowRenderer({
+    navigate: navigateToIssue,
+    onUpdate: updateInline,
+    requestRender: doRender,
+    getSelectedId: () => selected_id,
+    row_class: 'issue-row epic-row-inline',
+    title_renderer: /** @param {{ id: string, title?: string }} it */ (it) => {
+      const id = String(it.id);
+      const is_open = expanded.has(id);
+      const { total, closed } = getEpicCounters(id);
+      return html`
+        <span class="epic-title-cell" data-epic-id=${id}>
+          <span
+            class="epic-chevron"
+            role="button"
+            tabindex="0"
+            aria-expanded=${is_open ? 'true' : 'false'}
+            aria-label=${is_open ? 'Collapse epic' : 'Expand epic'}
+            @click=${
+              /** @param {Event} ev */ (ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                void toggleEpic(id);
+              }
+            }
+            @keydown=${
+              /** @param {KeyboardEvent} ev */ (ev) => {
+                if (ev.key === 'Enter' || ev.key === ' ') {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  void toggleEpic(id);
+                }
+              }
+            }
+            >${is_open ? '▾' : '▸'}</span
+          >
+          <span class="epic-title-text">${it.title || ''}</span>
+          <span class="epic-progress">
+            <progress value=${closed} max=${Math.max(1, total)}></progress>
+            <span class="muted mono">${closed}/${total}</span>
+          </span>
+        </span>
+      `;
+    }
   });
 
   /**
@@ -319,99 +381,6 @@ export function createListView(
   }
 
   /**
-   * Render an epic row with chevron, progress bar, and standard row cells.
-   *
-   * @param {Issue} it
-   */
-  function renderEpicRow(it) {
-    const id = String(it.id);
-    const is_open = expanded.has(id);
-    const { total, closed } = getEpicCounters(id);
-    return html`
-      <tr
-        class="issue-row epic-row-inline"
-        data-issue-id=${id}
-        data-epic-id=${id}
-        role="row"
-      >
-        <td role="gridcell" class="mono">${createIssueIdRenderer(id)}</td>
-        <td role="gridcell">${createTypeBadge(it.issue_type)}</td>
-        <td role="gridcell">
-          <div
-            class="epic-header"
-            role="button"
-            tabindex="0"
-            aria-expanded=${is_open ? 'true' : 'false'}
-            @click=${
-              /** @param {Event} ev */ (ev) => {
-                ev.stopPropagation();
-                void toggleEpic(id);
-              }
-            }
-            @keydown=${
-              /** @param {KeyboardEvent} ev */ (ev) => {
-                if (ev.key === 'Enter' || ev.key === ' ') {
-                  ev.preventDefault();
-                  void toggleEpic(id);
-                }
-              }
-            }
-          >
-            <span class="epic-chevron">${is_open ? '▾' : '▸'}</span>
-            <span class="text-truncate" style="margin-left:6px"
-              >${it.title || ''}</span
-            >
-            <span
-              class="epic-progress"
-              style="margin-left:auto; display:flex; align-items:center; gap:6px;"
-            >
-              <progress value=${closed} max=${Math.max(1, total)}></progress>
-              <span class="muted mono">${closed}/${total}</span>
-            </span>
-          </div>
-        </td>
-        <td role="gridcell">${statusLabel(String(it.status || 'open'))}</td>
-        <td role="gridcell">${it.assignee || ''}</td>
-        <td role="gridcell">P${it.priority ?? 2}</td>
-        <td role="gridcell"></td>
-      </tr>
-    `;
-  }
-
-  /**
-   * Render a child row beneath its expanded epic (read-only display for v1).
-   *
-   * @param {Issue} it
-   */
-  function renderChildRow(it) {
-    return html`<tr
-      role="row"
-      class="issue-row epic-child-row"
-      data-issue-id=${it.id}
-      data-epic-child="true"
-      @click=${
-        /** @param {Event} ev */ (ev) => {
-          const el = /** @type {HTMLElement|null} */ (ev.target);
-          if (el && (el.tagName === 'INPUT' || el.tagName === 'SELECT')) return;
-          const nav = navigateFn || ((h) => (window.location.hash = h));
-          const view = store ? store.getState().view : 'issues';
-          nav(issueHashFor(view, it.id));
-        }
-      }
-    >
-      <td role="gridcell" class="mono">${createIssueIdRenderer(it.id)}</td>
-      <td role="gridcell">${createTypeBadge(it.issue_type)}</td>
-      <td role="gridcell">
-        <span class="text-truncate">${it.title || ''}</span>
-      </td>
-      <td role="gridcell">${statusLabel(String(it.status || 'open'))}</td>
-      <td role="gridcell">${it.assignee || ''}</td>
-      <td role="gridcell">P${it.priority ?? 2}</td>
-      <td role="gridcell"></td>
-    </tr>`;
-  }
-
-  /**
    * Build lit-html template for the list view.
    */
   function template() {
@@ -459,7 +428,7 @@ export function createListView(
     const rows_array = [];
     for (const it of merged) {
       if (String(it.issue_type || '') === 'epic') {
-        rows_array.push(renderEpicRow(it));
+        rows_array.push(epic_row_renderer(it));
         if (expanded.has(String(it.id))) {
           const children = selectors
             ? selectors.selectEpicChildren(String(it.id))
@@ -468,7 +437,7 @@ export function createListView(
             /** @type {Issue[]} */ (children)
           );
           for (const child of filtered_children) {
-            rows_array.push(renderChildRow(child));
+            rows_array.push(child_row_renderer(child));
           }
         }
       } else {

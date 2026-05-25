@@ -712,7 +712,7 @@ describe('views/list', () => {
     expect(rows).toEqual(['UI-1', 'UI-2']);
   });
 
-  test('clicking epic header toggles expanded state', async () => {
+  test('clicking epic chevron toggles expanded state', async () => {
     document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
     const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
     const stores = createTestIssueStores();
@@ -746,15 +746,15 @@ describe('views/list', () => {
       stores
     );
     await view.load();
-    const header = mount.querySelector('[data-epic-id="X-1"] .epic-header');
-    expect(header).toBeTruthy();
-    expect(header?.getAttribute('aria-expanded')).toBe('false');
-    /** @type {HTMLElement} */ (header).click();
+    const chevron = mount.querySelector('[data-epic-id="X-1"] .epic-chevron');
+    expect(chevron).toBeTruthy();
+    expect(chevron?.getAttribute('aria-expanded')).toBe('false');
+    /** @type {HTMLElement} */ (chevron).click();
     await Promise.resolve();
-    expect(header?.getAttribute('aria-expanded')).toBe('true');
+    expect(chevron?.getAttribute('aria-expanded')).toBe('true');
   });
 
-  test('clicking epic header twice collapses (toggle is bidirectional)', async () => {
+  test('clicking epic chevron twice collapses (toggle is bidirectional)', async () => {
     document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
     const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
     const stores = createTestIssueStores();
@@ -808,18 +808,18 @@ describe('views/list', () => {
     );
     await view.load();
 
-    const header = mount.querySelector('[data-epic-id="X-1"] .epic-header');
-    expect(header).toBeTruthy();
+    const chevron = mount.querySelector('[data-epic-id="X-1"] .epic-chevron');
+    expect(chevron).toBeTruthy();
 
     // Click 1: expand
-    /** @type {HTMLElement} */ (header).click();
+    /** @type {HTMLElement} */ (chevron).click();
     await Promise.resolve();
-    expect(header?.getAttribute('aria-expanded')).toBe('true');
+    expect(chevron?.getAttribute('aria-expanded')).toBe('true');
 
     // Click 2: collapse
-    /** @type {HTMLElement} */ (header).click();
+    /** @type {HTMLElement} */ (chevron).click();
     await Promise.resolve();
-    expect(header?.getAttribute('aria-expanded')).toBe('false');
+    expect(chevron?.getAttribute('aria-expanded')).toBe('false');
     // Child row no longer in DOM after collapse
     expect(mount.querySelector('[data-issue-id="X-2"]')).toBeFalsy();
   });
@@ -1003,7 +1003,7 @@ describe('views/list', () => {
 
     // Expand the epic
     /** @type {HTMLElement} */ (
-      mount.querySelector('[data-epic-id="X-EPIC"] .epic-header')
+      mount.querySelector('[data-epic-id="X-EPIC"] .epic-chevron')
     ).click();
     await Promise.resolve();
 
@@ -1105,7 +1105,59 @@ describe('views/list', () => {
     );
     await view.load();
 
-    const header = mount.querySelector('[data-epic-id="X-EPIC"] .epic-header');
-    expect(header?.getAttribute('aria-expanded')).toBe('false');
+    const chevron = mount.querySelector(
+      '[data-epic-id="X-EPIC"] .epic-chevron'
+    );
+    expect(chevron?.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  test('clicking epic title (not chevron) navigates instead of expanding', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const stores = createTestIssueStores();
+    stores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues: [
+        {
+          id: 'X-1',
+          title: 'Epic A',
+          status: 'open',
+          priority: 1,
+          issue_type: 'epic'
+        }
+      ]
+    });
+    stores.getStore('tab:epics').applyPush({
+      type: 'snapshot',
+      id: 'tab:epics',
+      revision: 1,
+      issues: [{ id: 'X-1', total_children: 1, closed_children: 0 }]
+    });
+    const view = createListView(
+      mount,
+      async () => null,
+      () => {},
+      undefined,
+      undefined,
+      stores
+    );
+    await view.load();
+
+    // Title text uses a span (no inline edit on epic rows — title_renderer
+    // emits a plain text span); clicking it should bubble to the row click
+    // handler and navigate, NOT expand the epic.
+    const titleText = mount.querySelector(
+      '[data-issue-id="X-1"] .epic-title-text'
+    );
+    expect(titleText).toBeTruthy();
+    const chevron = mount.querySelector('[data-issue-id="X-1"] .epic-chevron');
+    expect(chevron?.getAttribute('aria-expanded')).toBe('false');
+
+    // Click title — should NOT expand (chevron's click target is independent)
+    /** @type {HTMLElement} */ (titleText).click();
+    await Promise.resolve();
+    expect(chevron?.getAttribute('aria-expanded')).toBe('false');
   });
 });
