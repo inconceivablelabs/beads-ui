@@ -1221,6 +1221,10 @@ input.inline-edit:focus {
 
 .epic-child-row td {
   color: var(--muted);
+  /* Compact row height: tighten vertical padding from --space-6 default to --space-3
+     so child rows read denser than top-level/epic rows. */
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-3);
 }
 
 .epic-child-row td:first-child,
@@ -1228,7 +1232,9 @@ input.inline-edit:focus {
   padding-left: 36px;
 }
 
-.epic-child-row td:first-child::before {
+/* Leader marker on the Title cell (column 3), not the ID — visually pairs with
+   the chevron position above and reads as a continuation of the title flow. */
+.epic-child-row td:nth-child(3)::before {
   content: '↳ ';
   opacity: 0.55;
   margin-right: 4px;

@@ -433,33 +433,9 @@ export function createListView(
           const children = selectors
             ? selectors.selectEpicChildren(String(it.id))
             : [];
-          if (typeof console !== 'undefined') {
-            console.log(
-              '[ds-zsd debug] epic',
-              String(it.id),
-              'status_filters:',
-              JSON.stringify(status_filters),
-              'type_filters:',
-              JSON.stringify(type_filters)
-            );
-            console.log(
-              '[ds-zsd debug] children pre-filter:',
-              children.map((c) => ({
-                id: c.id,
-                status: c.status,
-                issue_type: c.issue_type
-              }))
-            );
-          }
           const filtered_children = applyFiltersToIssues(
             /** @type {Issue[]} */ (children)
           );
-          if (typeof console !== 'undefined') {
-            console.log(
-              '[ds-zsd debug] children post-filter:',
-              filtered_children.map((c) => ({ id: c.id, status: c.status }))
-            );
-          }
           for (const child of filtered_children) {
             rows_array.push(child_row_renderer(child));
           }
