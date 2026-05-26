@@ -414,10 +414,29 @@ export function bootstrap(root_element) {
       log('board prefs parse error: %o', err);
     }
 
+    // Load persisted Issues-list column sort
+    /** @type {{ column: string | null, direction: 'asc'|'desc' }} */
+    let persistedSort = { column: null, direction: 'asc' };
+    try {
+      const raw_sort = window.localStorage.getItem('beads-ui.sort');
+      if (raw_sort) {
+        const obj = JSON.parse(raw_sort);
+        if (obj && typeof obj === 'object') {
+          persistedSort = {
+            column: typeof obj.column === 'string' ? obj.column : null,
+            direction: obj.direction === 'desc' ? 'desc' : 'asc'
+          };
+        }
+      }
+    } catch (err) {
+      log('sort prefs parse error: %o', err);
+    }
+
     const store = createStore({
       filters: persisted_filters,
       view: last_view,
-      board: persistedBoard
+      board: persistedBoard,
+      sort: persistedSort
     });
     const router = createHashRouter(store);
     router.start();
@@ -509,6 +528,13 @@ export function bootstrap(root_element) {
       window.localStorage.setItem(
         'beads-ui.board',
         JSON.stringify({ closed_filter: s.board.closed_filter })
+      );
+    });
+    // Persist Issues-list column sort
+    store.subscribe((s) => {
+      window.localStorage.setItem(
+        'beads-ui.sort',
+        JSON.stringify({ column: s.sort.column, direction: s.sort.direction })
       );
     });
     void issues_view.load();

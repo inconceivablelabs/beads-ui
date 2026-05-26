@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { createSubscriptionIssueStore } from '../data/subscription-issue-store.js';
+import { createStore } from '../state.js';
 import { createListView } from './list.js';
 
 /**
@@ -1159,5 +1160,234 @@ describe('views/list', () => {
     /** @type {HTMLElement} */ (titleText).click();
     await Promise.resolve();
     expect(chevron?.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  /**
+   * @param {HTMLElement} mount
+   * @returns {string[]}
+   */
+  function topLevelIds(mount) {
+    return Array.from(mount.querySelectorAll('tr.issue-row')).map(
+      (el) => el.getAttribute('data-issue-id') || ''
+    );
+  }
+
+  test('clicking a column header sorts rows ascending and persists to store', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const issues = [
+      { id: 'UI-1', title: 'Charlie', status: 'open', priority: 1 },
+      { id: 'UI-2', title: 'Alpha', status: 'open', priority: 2 },
+      { id: 'UI-3', title: 'Bravo', status: 'open', priority: 3 }
+    ];
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues
+    });
+    const store = createStore();
+    const view = createListView(
+      mount,
+      async () => [],
+      undefined,
+      store,
+      undefined,
+      issueStores
+    );
+    await view.load();
+
+    // Default ordering is by priority.
+    expect(topLevelIds(mount)).toEqual(['UI-1', 'UI-2', 'UI-3']);
+
+    const titleHeader = /** @type {HTMLElement} */ (
+      mount.querySelector('th[data-sort-col="title"]')
+    );
+    expect(titleHeader).toBeTruthy();
+    titleHeader.click();
+    await Promise.resolve();
+
+    // Now sorted by title ascending: Alpha, Bravo, Charlie.
+    expect(topLevelIds(mount)).toEqual(['UI-2', 'UI-3', 'UI-1']);
+    expect(store.getState().sort).toEqual({
+      column: 'title',
+      direction: 'asc'
+    });
+    // Ascending indicator shown on the active column.
+    const active = /** @type {HTMLElement} */ (
+      mount.querySelector('th[data-sort-col="title"]')
+    );
+    expect(active.getAttribute('aria-sort')).toBe('ascending');
+    expect(active.querySelector('.sort-indicator')?.textContent).toContain('▲');
+  });
+
+  test('clicking the same header again flips to descending', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const issues = [
+      { id: 'UI-1', title: 'Charlie', status: 'open', priority: 1 },
+      { id: 'UI-2', title: 'Alpha', status: 'open', priority: 2 },
+      { id: 'UI-3', title: 'Bravo', status: 'open', priority: 3 }
+    ];
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues
+    });
+    const store = createStore();
+    const view = createListView(
+      mount,
+      async () => [],
+      undefined,
+      store,
+      undefined,
+      issueStores
+    );
+    await view.load();
+
+    const click = () =>
+      /** @type {HTMLElement} */ (
+        mount.querySelector('th[data-sort-col="title"]')
+      ).click();
+
+    click();
+    await Promise.resolve();
+    expect(topLevelIds(mount)).toEqual(['UI-2', 'UI-3', 'UI-1']);
+
+    click();
+    await Promise.resolve();
+    // Descending by title: Charlie, Bravo, Alpha.
+    expect(topLevelIds(mount)).toEqual(['UI-1', 'UI-3', 'UI-2']);
+    expect(store.getState().sort).toEqual({
+      column: 'title',
+      direction: 'desc'
+    });
+    const active = /** @type {HTMLElement} */ (
+      mount.querySelector('th[data-sort-col="title"]')
+    );
+    expect(active.getAttribute('aria-sort')).toBe('descending');
+    expect(active.querySelector('.sort-indicator')?.textContent).toContain('▼');
+  });
+
+  test('column sort applies to expanded epic children', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const stores = createTestIssueStores();
+    stores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues: [
+        {
+          id: 'X-EPIC',
+          title: 'Epic',
+          status: 'open',
+          priority: 1,
+          issue_type: 'epic'
+        }
+      ]
+    });
+    stores.getStore('tab:epics').applyPush({
+      type: 'snapshot',
+      id: 'tab:epics',
+      revision: 1,
+      issues: [{ id: 'X-EPIC', total_children: 2, closed_children: 0 }]
+    });
+    stores.getStore('detail:X-EPIC').applyPush({
+      type: 'snapshot',
+      id: 'detail:X-EPIC',
+      revision: 1,
+      issues: [
+        {
+          id: 'X-EPIC',
+          dependents: [
+            {
+              id: 'X-2',
+              title: 'Zeta',
+              status: 'open',
+              priority: 1,
+              issue_type: 'task'
+            },
+            {
+              id: 'X-3',
+              title: 'Alpha',
+              status: 'open',
+              priority: 2,
+              issue_type: 'task'
+            }
+          ]
+        }
+      ]
+    });
+    const store = createStore();
+    const view = createListView(
+      mount,
+      async () => null,
+      () => {},
+      store,
+      undefined,
+      stores
+    );
+    await view.load();
+
+    // Expand the epic.
+    /** @type {HTMLElement} */ (
+      mount.querySelector('[data-epic-id="X-EPIC"] .epic-chevron')
+    ).click();
+    await Promise.resolve();
+
+    const childIds = () =>
+      Array.from(mount.querySelectorAll('tr.epic-child-row')).map(
+        (el) => el.getAttribute('data-issue-id') || ''
+      );
+    // Natural order before any sort.
+    expect(childIds()).toEqual(['X-2', 'X-3']);
+
+    // Sort by title ascending — children reorder Alpha (X-3) before Zeta (X-2).
+    /** @type {HTMLElement} */ (
+      mount.querySelector('th[data-sort-col="title"]')
+    ).click();
+    await Promise.resolve();
+    expect(childIds()).toEqual(['X-3', 'X-2']);
+  });
+
+  test('initializes sort from store and renders the indicator on load', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const issues = [
+      { id: 'UI-1', title: 'A', status: 'open', priority: 1 },
+      { id: 'UI-2', title: 'B', status: 'open', priority: 2 },
+      { id: 'UI-3', title: 'C', status: 'open', priority: 3 }
+    ];
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues
+    });
+    const store = createStore({
+      sort: { column: 'priority', direction: 'desc' }
+    });
+    const view = createListView(
+      mount,
+      async () => [],
+      undefined,
+      store,
+      undefined,
+      issueStores
+    );
+    await view.load();
+
+    // Priority descending on first paint.
+    expect(topLevelIds(mount)).toEqual(['UI-3', 'UI-2', 'UI-1']);
+    const active = /** @type {HTMLElement} */ (
+      mount.querySelector('th[data-sort-col="priority"]')
+    );
+    expect(active.getAttribute('aria-sort')).toBe('descending');
+    expect(active.querySelector('.sort-indicator')?.textContent).toContain('▼');
   });
 });
