@@ -1358,6 +1358,53 @@ describe('views/list', () => {
     expect(active.querySelector('.sort-indicator')?.textContent).toContain('▼');
   });
 
+  test('clicking the same header a third time clears the sort back to default', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const issues = [
+      { id: 'UI-1', title: 'Charlie', status: 'open', priority: 1 },
+      { id: 'UI-2', title: 'Alpha', status: 'open', priority: 2 },
+      { id: 'UI-3', title: 'Bravo', status: 'open', priority: 3 }
+    ];
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues
+    });
+    const store = createStore();
+    const view = createListView(
+      mount,
+      async () => [],
+      undefined,
+      store,
+      undefined,
+      issueStores
+    );
+    await view.load();
+
+    const click = () =>
+      /** @type {HTMLElement} */ (
+        mount.querySelector('th[data-sort-col="title"]')
+      ).click();
+
+    click(); // asc
+    click(); // desc
+    await Promise.resolve();
+    expect(topLevelIds(mount)).toEqual(['UI-1', 'UI-3', 'UI-2']);
+
+    click(); // cleared → back to priority default
+    await Promise.resolve();
+    expect(topLevelIds(mount)).toEqual(['UI-1', 'UI-2', 'UI-3']);
+    expect(store.getState().sort).toEqual({ column: null, direction: 'asc' });
+    const header = /** @type {HTMLElement} */ (
+      mount.querySelector('th[data-sort-col="title"]')
+    );
+    expect(header.getAttribute('aria-sort')).toBe('none');
+    expect(header.querySelector('.sort-indicator')).toBeFalsy();
+  });
+
   test('column sort applies to expanded epic children', async () => {
     document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
     const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
