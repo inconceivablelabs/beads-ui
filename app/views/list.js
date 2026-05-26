@@ -286,17 +286,24 @@ export function createListView(
   }
 
   /**
-   * Apply a column header click: select the column ascending, or flip the
-   * direction if it's already the active sort column. Persisted in the store
-   * so reload and view switches keep the choice (mirrors filter persistence).
+   * Apply a column header click as a three-state cycle on the active column:
+   * ascending → descending → cleared (back to the default ordering). Clicking a
+   * different column starts that column ascending. Persisted in the store so
+   * reload and view switches keep the choice (mirrors filter persistence).
    *
    * @param {string} column
    */
   function setSort(column) {
-    if (sort_column === column) {
-      sort_direction = sort_direction === 'asc' ? 'desc' : 'asc';
-    } else {
+    if (sort_column !== column) {
+      // First click on a new column → ascending.
       sort_column = column;
+      sort_direction = 'asc';
+    } else if (sort_direction === 'asc') {
+      // Second click → descending.
+      sort_direction = 'desc';
+    } else {
+      // Third click → clear sort, restoring the default ordering.
+      sort_column = null;
       sort_direction = 'asc';
     }
     if (store) {
