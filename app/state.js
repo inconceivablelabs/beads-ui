@@ -29,6 +29,13 @@ import { normalizeStatusFilters, sameStatusFilters } from './utils/status.js';
  */
 
 /**
+ * Active column sort for the Issues list. `column: null` means "no explicit
+ * sort" — views fall back to their default ordering.
+ *
+ * @typedef {{ column: string | null, direction: 'asc'|'desc' }} SortState
+ */
+
+/**
  * @typedef {Object} WorkspaceInfo
  * @property {string} path - Full path to workspace
  * @property {string} database - Path to the database file
@@ -43,14 +50,14 @@ import { normalizeStatusFilters, sameStatusFilters } from './utils/status.js';
  */
 
 /**
- * @typedef {{ selected_id: string | null, view: ViewName, filters: Filters, board: BoardState, workspace: WorkspaceState }} AppState
+ * @typedef {{ selected_id: string | null, view: ViewName, filters: Filters, board: BoardState, sort: SortState, workspace: WorkspaceState }} AppState
  */
 
 /**
  * Create a simple store for application state.
  *
- * @param {Partial<AppState>} [initial]
- * @returns {{ getState: () => AppState, setState: (patch: { selected_id?: string | null, filters?: Partial<Filters>, workspace?: Partial<WorkspaceState> }) => void, subscribe: (fn: (s: AppState) => void) => () => void }}
+ * @param {{ selected_id?: string | null, view?: ViewName, filters?: Partial<Filters>, board?: Partial<BoardState>, sort?: Partial<SortState>, workspace?: Partial<WorkspaceState> }} [initial]
+ * @returns {{ getState: () => AppState, setState: (patch: { selected_id?: string | null, filters?: Partial<Filters>, board?: Partial<BoardState>, sort?: Partial<SortState>, workspace?: Partial<WorkspaceState> }) => void, subscribe: (fn: (s: AppState) => void) => () => void }}
  */
 export function createStore(initial = {}) {
   const log = debug('state');
@@ -71,6 +78,11 @@ export function createStore(initial = {}) {
         initial.board?.closed_filter === 'today'
           ? initial.board?.closed_filter
           : 'today'
+    },
+    sort: {
+      column:
+        typeof initial.sort?.column === 'string' ? initial.sort.column : null,
+      direction: initial.sort?.direction === 'desc' ? 'desc' : 'asc'
     },
     workspace: {
       current: initial.workspace?.current ?? null,
@@ -98,7 +110,7 @@ export function createStore(initial = {}) {
     /**
      * Update state. Nested filters can be partial.
      *
-     * @param {{ selected_id?: string | null, filters?: Partial<Filters>, board?: Partial<BoardState>, workspace?: Partial<WorkspaceState> }} patch
+     * @param {{ selected_id?: string | null, filters?: Partial<Filters>, board?: Partial<BoardState>, sort?: Partial<SortState>, workspace?: Partial<WorkspaceState> }} patch
      */
     setState(patch) {
       /** @type {AppState} */
@@ -114,6 +126,7 @@ export function createStore(initial = {}) {
               : state.filters.status
         },
         board: { ...state.board, ...(patch.board || {}) },
+        sort: { ...state.sort, ...(patch.sort || {}) },
         workspace: {
           current:
             patch.workspace?.current !== undefined
@@ -136,6 +149,8 @@ export function createStore(initial = {}) {
         next.filters.search === state.filters.search &&
         next.filters.type === state.filters.type &&
         next.board.closed_filter === state.board.closed_filter &&
+        next.sort.column === state.sort.column &&
+        next.sort.direction === state.sort.direction &&
         !workspace_changed
       ) {
         return;
