@@ -4,7 +4,11 @@
  */
 import { html, render } from 'lit-html';
 import { createListSelectors } from '../data/list-selectors.js';
-import { cmpClosedDesc } from '../data/sort.js';
+import {
+  cmpClosedDesc,
+  cmpPriorityThenCreated,
+  makeColumnComparator
+} from '../data/sort.js';
 import { ISSUE_TYPES, typeLabel } from '../utils/issue-type.js';
 import { issueHashFor } from '../utils/issue-url.js';
 import { debug } from '../utils/logging.js';
@@ -79,6 +83,10 @@ export function createListView(
   let unsubscribe = null;
   let status_dropdown_open = false;
   let type_dropdown_open = false;
+  /** @type {string | null} */
+  let sort_column = null;
+  /** @type {'asc'|'desc'} */
+  let sort_direction = 'asc';
 
   /**
    * Normalize legacy string filter to array format.
@@ -295,6 +303,44 @@ export function createListView(
       search_text = s.filters.search || '';
       type_filters = normalizeTypeFilter(s.filters.type);
     }
+    if (s && s.sort && typeof s.sort === 'object') {
+      sort_column = typeof s.sort.column === 'string' ? s.sort.column : null;
+      sort_direction = s.sort.direction === 'desc' ? 'desc' : 'asc';
+    }
+  }
+
+  /**
+   * Apply a column header click: select the column ascending, or flip the
+   * direction if it's already the active sort column. Persisted in the store
+   * so reload and view switches keep the choice (mirrors filter persistence).
+   *
+   * @param {string} column
+   */
+  function setSort(column) {
+    if (sort_column === column) {
+      sort_direction = sort_direction === 'asc' ? 'desc' : 'asc';
+    } else {
+      sort_column = column;
+      sort_direction = 'asc';
+    }
+    if (store) {
+      store.setState({
+        sort: { column: sort_column, direction: sort_direction }
+      });
+    }
+    doRender();
+  }
+
+  /**
+   * Comparator for the currently active ordering. An explicit column sort wins;
+   * otherwise rows keep the default priority-then-created ordering.
+   *
+   * @returns {(a: Issue, b: Issue) => number}
+   */
+  function activeComparator() {
+    return sort_column
+      ? makeColumnComparator(sort_column, sort_direction)
+      : cmpPriorityThenCreated;
   }
   // Initial values are reflected via bound `.value` in the template
   // Compose helpers: centralize membership + entity selection + sorting
@@ -410,6 +456,36 @@ export function createListView(
   }
 
   /**
+   * Render a clickable column header that toggles sort on the given column.
+   * Shows ▲/▼ and sets aria-sort when this column is the active sort.
+   *
+   * @param {string} label
+   * @param {string} column
+   */
+  function sortableHeader(label, column) {
+    const active = sort_column === column;
+    const aria = active
+      ? sort_direction === 'asc'
+        ? 'ascending'
+        : 'descending'
+      : 'none';
+    const glyph = sort_direction === 'asc' ? '▲' : '▼';
+    return html`
+      <th
+        role="columnheader"
+        class="sortable ${active ? 'is-sorted' : ''}"
+        data-sort-col=${column}
+        aria-sort=${aria}
+        @click=${() => setSort(column)}
+      >
+        ${label}${active
+          ? html`<span class="sort-indicator"> ${glyph}</span>`
+          : ''}
+      </th>
+    `;
+  }
+
+  /**
    * Build lit-html template for the list view.
    */
   function template() {
@@ -452,16 +528,10 @@ export function createListView(
       issues_cache
     );
 
-    // Merge epics and non-epic top-level rows by the existing priority/created sort.
-    const merged = [...epic_rows, ...top_level_rows].sort((a, b) => {
-      const pa = a.priority ?? 2;
-      const pb = b.priority ?? 2;
-      if (pa !== pb) return pa - pb;
-      const ca = /** @type {any} */ (a).created_at ?? 0;
-      const cb = /** @type {any} */ (b).created_at ?? 0;
-      if (ca !== cb) return ca < cb ? -1 : 1;
-      return String(a.id) < String(b.id) ? -1 : 1;
-    });
+    // Merge epics and non-epic top-level rows. Default to priority/created;
+    // an active column-header sort overrides it.
+    const cmp = activeComparator();
+    const merged = [...epic_rows, ...top_level_rows].sort(cmp);
 
     /** @type {import('lit-html').TemplateResult<1>[]} */
     const rows_array = [];
@@ -475,7 +545,12 @@ export function createListView(
           const filtered_children = applyFiltersToIssues(
             /** @type {Issue[]} */ (children)
           );
-          for (const child of filtered_children) {
+          // Children follow the same active sort as the top-level list; with no
+          // explicit column sort they keep their natural (dependent) order.
+          const sorted_children = sort_column
+            ? filtered_children.slice().sort(cmp)
+            : filtered_children;
+          for (const child of sorted_children) {
             rows_array.push(child_row_renderer(child));
           }
         }
@@ -598,12 +673,12 @@ export function createListView(
                 </colgroup>
                 <thead>
                   <tr role="row">
-                    <th role="columnheader">ID</th>
-                    <th role="columnheader">Type</th>
-                    <th role="columnheader">Title</th>
-                    <th role="columnheader">Status</th>
-                    <th role="columnheader">Assignee</th>
-                    <th role="columnheader">Priority</th>
+                    ${sortableHeader('ID', 'id')}
+                    ${sortableHeader('Type', 'issue_type')}
+                    ${sortableHeader('Title', 'title')}
+                    ${sortableHeader('Status', 'status')}
+                    ${sortableHeader('Assignee', 'assignee')}
+                    ${sortableHeader('Priority', 'priority')}
                     <th role="columnheader">Deps</th>
                   </tr>
                 </thead>

@@ -1414,6 +1414,17 @@ input.inline-edit:focus {
     color: var(--muted);
     font-weight: 600;
   }
+  th.sortable {
+    cursor: pointer;
+    user-select: none;
+  }
+  th.sortable:hover,
+  th.is-sorted {
+    color: var(--fg);
+  }
+  .sort-indicator {
+    font-size: 10px;
+  }
 }
 .epic-row:hover {
   background: color-mix(in srgb, var(--control-bg) 55%, transparent);
