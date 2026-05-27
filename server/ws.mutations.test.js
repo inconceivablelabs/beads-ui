@@ -442,4 +442,42 @@ describe('ws mutation handlers', () => {
       expect.objectContaining({ cwd: '/tmp/bdui-ws-test-fixture' })
     );
   });
+
+  test('update-type runs bd in the active workspace cwd', async () => {
+    const mRun = /** @type {import('vitest').Mock} */ (runBd);
+    const mJson = /** @type {import('vitest').Mock} */ (runBdJson);
+
+    const ws_setup = makeStubSocket();
+    await handleMessage(
+      /** @type {any} */ (ws_setup),
+      Buffer.from(
+        JSON.stringify({
+          id: 'sw-type',
+          type: 'set-workspace',
+          payload: { path: '/tmp/bdui-ws-test-fixture' }
+        })
+      )
+    );
+
+    mRun.mockResolvedValueOnce({ code: 0, stdout: '', stderr: '' });
+    mJson.mockResolvedValueOnce({
+      code: 0,
+      stdoutJson: { id: 'UI-7', issue_type: 'feature' }
+    });
+    const ws = makeStubSocket();
+    const req = {
+      id: 'r-cwd-type',
+      type: /** @type {any} */ ('update-type'),
+      payload: { id: 'UI-7', type: 'feature' }
+    };
+    await handleMessage(
+      /** @type {any} */ (ws),
+      Buffer.from(JSON.stringify(req))
+    );
+
+    expect(mRun).toHaveBeenCalledWith(
+      ['update', 'UI-7', '--type', 'feature'],
+      expect.objectContaining({ cwd: '/tmp/bdui-ws-test-fixture' })
+    );
+  });
 });
