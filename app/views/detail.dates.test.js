@@ -136,7 +136,7 @@ describe('views/detail Dates card', () => {
     expect(rowValue(card2, 'Started')).toBeNull();
   });
 
-  test('Closed renders with close_reason inline only when closed', async () => {
+  test('Closed renders the date only (reason lives in Properties) and is absent when open', async () => {
     const closed = await mountIssue({
       id: 'UI-203',
       title: 'D',
@@ -147,9 +147,11 @@ describe('views/detail Dates card', () => {
       close_reason: 'Done'
     });
     const card1 = /** @type {Element} */ (datesCard(closed));
-    const closedVal = rowValue(card1, 'Closed');
+    const closedVal = /** @type {string} */ (rowValue(card1, 'Closed'));
     expect(closedVal).toContain('Mar');
-    expect(closedVal).toContain('Done');
+    // Close reason is shown in the Properties card, not duplicated here.
+    expect(closedVal).not.toContain('Done');
+    expect(closedVal).not.toContain('—');
 
     const open = await mountIssue({
       id: 'UI-204',

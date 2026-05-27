@@ -1163,12 +1163,9 @@ export function createDetailView(
 
     // Dates section block — rendered below Properties. Rows render
     // conditionally; absent values are omitted (no blank rows).
-    const closed_at_value = formatDateValue(issue.closed_at);
-    const closed_display = closed_at_value
-      ? issue.close_reason
-        ? `${closed_at_value} — ${issue.close_reason}`
-        : closed_at_value
-      : '';
+    // Date only — the close reason is shown in the Properties card, not
+    // duplicated here.
+    const closed_display = formatDateValue(issue.closed_at);
     const dates_block = html`<div class="props-card dates">
       <div class="props-card__header">
         <div class="props-card__title">Dates</div>
