@@ -53,7 +53,7 @@ export function cmpClosedDesc(a, b) {
 /**
  * Columns the Issues list can be sorted by via column headers.
  *
- * @type {Array<'id'|'issue_type'|'title'|'status'|'assignee'|'priority'>}
+ * @type {Array<'id'|'issue_type'|'title'|'status'|'assignee'|'priority'|'created'>}
  */
 export const SORTABLE_COLUMNS = [
   'id',
@@ -61,7 +61,8 @@ export const SORTABLE_COLUMNS = [
   'title',
   'status',
   'assignee',
-  'priority'
+  'priority',
+  'created'
 ];
 
 // Canonical status rank, derived from the single status vocabulary so a new
@@ -89,7 +90,7 @@ function cmpIdAsc(a, b) {
  * strings sort last on ascending order by mapping to a high sentinel.
  *
  * @param {IssueLite} issue
- * @param {'id'|'issue_type'|'title'|'status'|'assignee'} column
+ * @param {'id'|'issue_type'|'title'|'status'|'assignee'|'created'} column
  * @returns {number | string}
  */
 function columnKey(issue, column) {
@@ -98,6 +99,8 @@ function columnKey(issue, column) {
       const rank = STATUS_RANK.get(String(issue.status ?? ''));
       return rank === undefined ? Number.MAX_SAFE_INTEGER : rank;
     }
+    case 'created':
+      return typeof issue.created_at === 'number' ? issue.created_at : 0;
     case 'id':
       return String(issue.id ?? '').toLowerCase();
     case 'issue_type':

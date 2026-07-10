@@ -667,7 +667,7 @@ export function createListView(
                 class="table"
                 role="grid"
                 aria-rowcount=${String(rows_array.length)}
-                aria-colcount="6"
+                aria-colcount="7"
               >
                 <colgroup>
                   <col style="width: 100px" />
@@ -676,6 +676,7 @@ export function createListView(
                   <col style="width: 120px" />
                   <col style="width: 160px" />
                   <col style="width: 130px" />
+                  <col style="width: 110px" />
                   <col style="width: 80px" />
                 </colgroup>
                 <thead>
@@ -686,6 +687,7 @@ export function createListView(
                     ${sortableHeader('Status', 'status')}
                     ${sortableHeader('Assignee', 'assignee')}
                     ${sortableHeader('Priority', 'priority')}
+                    ${sortableHeader('Created', 'created')}
                     <th role="columnheader">Deps</th>
                   </tr>
                 </thead>
