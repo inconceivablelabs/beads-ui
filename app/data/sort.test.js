@@ -20,14 +20,15 @@ function sortedIds(issues, cmp) {
 }
 
 describe('data/sort makeColumnComparator', () => {
-  test('exposes the six sortable columns', () => {
+  test('exposes the sortable columns including created', () => {
     expect(SORTABLE_COLUMNS).toEqual([
       'id',
       'issue_type',
       'title',
       'status',
       'assignee',
-      'priority'
+      'priority',
+      'created'
     ]);
   });
 
@@ -143,6 +144,48 @@ describe('data/sort makeColumnComparator', () => {
     expect(
       sortedIds(issues, makeColumnComparator('issue_type', 'asc'))
     ).toEqual(['2', '3', '1']);
+  });
+
+  test('created sorts ascending by created_at, id breaks ties', () => {
+    const issues = [
+      { id: 'A', created_at: 300 },
+      { id: 'C', created_at: 100 },
+      { id: 'B', created_at: 200 }
+    ];
+    expect(sortedIds(issues, makeColumnComparator('created', 'asc'))).toEqual([
+      'C',
+      'B',
+      'A'
+    ]);
+  });
+
+  test('created descending reverses the order', () => {
+    const issues = [
+      { id: 'A', created_at: 300 },
+      { id: 'C', created_at: 100 },
+      { id: 'B', created_at: 200 }
+    ];
+    expect(sortedIds(issues, makeColumnComparator('created', 'desc'))).toEqual([
+      'A',
+      'B',
+      'C'
+    ]);
+  });
+
+  test('created ties break by id ascending', () => {
+    const issues = [
+      { id: 'B', created_at: 100 },
+      { id: 'A', created_at: 100 }
+    ];
+    expect(sortedIds(issues, makeColumnComparator('created', 'asc'))).toEqual([
+      'A',
+      'B'
+    ]);
+    // Even descending keeps the id tie-break ascending for render stability.
+    expect(sortedIds(issues, makeColumnComparator('created', 'desc'))).toEqual([
+      'A',
+      'B'
+    ]);
   });
 
   test('unknown column falls back to priority-then-created ordering', () => {

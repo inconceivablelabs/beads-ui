@@ -1,4 +1,5 @@
 import { html } from 'lit-html';
+import { formatDateIso, formatDateYmd } from '../utils/date.js';
 import { createIssueIdRenderer } from '../utils/issue-id-renderer.js';
 import { ISSUE_TYPES, typeLabel } from '../utils/issue-type.js';
 import { emojiForPriority } from '../utils/priority-badge.js';
@@ -6,7 +7,7 @@ import { priority_levels } from '../utils/priority.js';
 import { statusLabel } from '../utils/status.js';
 
 /**
- * @typedef {{ id: string, title?: string, status?: string, priority?: number, issue_type?: string, assignee?: string, dependency_count?: number, dependent_count?: number }} IssueRowData
+ * @typedef {{ id: string, title?: string, status?: string, priority?: number, issue_type?: string, assignee?: string, created_at?: number, dependency_count?: number, dependent_count?: number }} IssueRowData
  */
 
 /**
@@ -203,6 +204,13 @@ export function createIssueRowRenderer(options) {
               </option>`
           )}
         </select>
+      </td>
+      <td
+        role="gridcell"
+        class="created-col mono muted"
+        title=${formatDateIso(it.created_at)}
+      >
+        ${formatDateYmd(it.created_at)}
       </td>
       <td role="gridcell" class="deps-col">
         ${(it.dependency_count || 0) > 0 || (it.dependent_count || 0) > 0

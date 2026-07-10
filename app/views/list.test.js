@@ -1401,6 +1401,73 @@ describe('views/list', () => {
     expect(childIds()).toEqual(['X-3', 'X-2']);
   });
 
+  test('clicking the Created header sorts rows by created_at and persists', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const issues = [
+      {
+        id: 'UI-1',
+        title: 'Charlie',
+        status: 'open',
+        priority: 1,
+        created_at: 300
+      },
+      {
+        id: 'UI-2',
+        title: 'Alpha',
+        status: 'open',
+        priority: 2,
+        created_at: 100
+      },
+      {
+        id: 'UI-3',
+        title: 'Bravo',
+        status: 'open',
+        priority: 3,
+        created_at: 200
+      }
+    ];
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues
+    });
+    const store = createStore();
+    const view = createListView(
+      mount,
+      async () => [],
+      undefined,
+      store,
+      undefined,
+      issueStores
+    );
+    await view.load();
+
+    // Default ordering is by priority.
+    expect(topLevelIds(mount)).toEqual(['UI-1', 'UI-2', 'UI-3']);
+
+    const createdHeader = /** @type {HTMLElement} */ (
+      mount.querySelector('th[data-sort-col="created"]')
+    );
+    expect(createdHeader).toBeTruthy();
+    createdHeader.click();
+    await Promise.resolve();
+
+    // Ascending by created_at: 100 (UI-2), 200 (UI-3), 300 (UI-1).
+    expect(topLevelIds(mount)).toEqual(['UI-2', 'UI-3', 'UI-1']);
+    expect(store.getState().sort).toEqual({
+      column: 'created',
+      direction: 'asc'
+    });
+    const active = /** @type {HTMLElement} */ (
+      mount.querySelector('th[data-sort-col="created"]')
+    );
+    expect(active.getAttribute('aria-sort')).toBe('ascending');
+    expect(active.querySelector('.sort-indicator')?.textContent).toContain('▲');
+  });
+
   test('initializes sort from store and renders the indicator on load', async () => {
     document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
     const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));

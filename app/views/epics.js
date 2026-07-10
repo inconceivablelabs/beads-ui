@@ -133,6 +133,7 @@ export function createEpicsView(
                           <th>Status</th>
                           <th>Assignee</th>
                           <th>Priority</th>
+                          <th>Created</th>
                         </tr>
                       </thead>
                       <tbody>
