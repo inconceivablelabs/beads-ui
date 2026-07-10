@@ -2322,6 +2322,12 @@ html[data-theme='dark'] {
   background: color-mix(in srgb, var(--danger, #b00020) 85%, #000);
 }
 
+/* Created date column */
+.created-col {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 /* Dependency indicators column */
 .deps-col {
   text-align: center;
