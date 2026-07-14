@@ -1,10 +1,17 @@
+/**
+ * @import { SettableStatus } from '../protocol.js'
+ */
 import { html } from 'lit-html';
 import { formatDateIso, formatDateYmd } from '../utils/date.js';
 import { createIssueIdRenderer } from '../utils/issue-id-renderer.js';
 import { ISSUE_TYPES, typeLabel } from '../utils/issue-type.js';
 import { emojiForPriority } from '../utils/priority-badge.js';
 import { priority_levels } from '../utils/priority.js';
-import { statusLabel } from '../utils/status.js';
+import {
+  isSettableStatus,
+  statusLabel,
+  statusOptions
+} from '../utils/status.js';
 
 /**
  * @typedef {{ id: string, title?: string, status?: string, priority?: number, issue_type?: string, assignee?: string, created_at?: number, dependency_count?: number, dependent_count?: number }} IssueRowData
@@ -16,7 +23,7 @@ import { statusLabel } from '../utils/status.js';
  *
  * @param {{
  *   navigate: (id: string) => void,
- *   onUpdate: (id: string, patch: { title?: string, assignee?: string, status?: 'open'|'in_progress'|'closed', priority?: number, issue_type?: string }) => Promise<void>,
+ *   onUpdate: (id: string, patch: { title?: string, assignee?: string, status?: SettableStatus, priority?: number, issue_type?: string }) => Promise<void>,
  *   requestRender: () => void,
  *   getSelectedId?: () => string | null,
  *   row_class?: string,
@@ -177,9 +184,16 @@ export function createIssueRowRenderer(options) {
           .value=${cur_status}
           @change=${makeSelectChange(it.id, 'status')}
         >
-          ${['open', 'in_progress', 'closed'].map(
+          ${statusOptions(cur_status).map(
             (s) =>
-              html`<option value=${s} ?selected=${cur_status === s}>
+              // An out-of-set current status (e.g. `pinned`) is shown so the
+              // select tells the truth, but disabled so it cannot be re-chosen:
+              // the server rejects `update-status pinned`.
+              html`<option
+                value=${s}
+                ?selected=${cur_status === s}
+                ?disabled=${!isSettableStatus(s)}
+              >
                 ${statusLabel(s)}
               </option>`
           )}

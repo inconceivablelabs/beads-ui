@@ -1,3 +1,6 @@
+/**
+ * @import { Status } from '../protocol.js'
+ */
 import { html, render } from 'lit-html';
 import { createListSelectors } from '../data/list-selectors.js';
 import {
@@ -8,13 +11,13 @@ import {
 import { ISSUE_TYPES, typeLabel } from '../utils/issue-type.js';
 import { issueHashFor } from '../utils/issue-url.js';
 import { debug } from '../utils/logging.js';
-import { statusLabel } from '../utils/status.js';
+import { STATUSES, statusLabel } from '../utils/status.js';
 import { createIssueRowRenderer } from './issue-row.js';
 
 // List view implementation; requires a transport send function.
 
 /**
- * @typedef {{ id: string, title?: string, status?: 'closed'|'open'|'in_progress', priority?: number, issue_type?: string, assignee?: string, labels?: string[] }} Issue
+ * @typedef {{ id: string, title?: string, status?: Status, priority?: number, issue_type?: string, assignee?: string, labels?: string[] }} Issue
  */
 
 /**
@@ -538,7 +541,7 @@ export function createListView(
             <span class="filter-dropdown__arrow">▾</span>
           </button>
           <div class="filter-dropdown__menu">
-            ${['ready', 'open', 'in_progress', 'closed'].map(
+            ${['ready', ...STATUSES].map(
               (s) => html`
                 <label class="filter-dropdown__option">
                   <input
@@ -546,7 +549,7 @@ export function createListView(
                     .checked=${status_filters.includes(s)}
                     @change=${() => toggleStatusFilter(s)}
                   />
-                  ${s === 'ready' ? 'Ready' : statusLabel(s)}
+                  ${statusLabel(s)}
                 </label>
               `
             )}
