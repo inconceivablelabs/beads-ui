@@ -2,14 +2,14 @@
   "tracking_issue_number": 1,
   "prs": {
     "100": {
-      "last_activity_id": "5096970720",
-      "last_activity_at": "2026-07-27T21:23:28Z",
+      "last_activity_id": "5118332245",
+      "last_activity_at": "2026-07-29T13:22:20Z",
       "state": "open"
     },
     "91": {
       "last_activity_id": "5084247607",
-      "last_activity_at": "2026-07-26T15:59:11Z",
-      "state": "open"
+      "last_activity_at": "2026-07-29T13:21:48Z",
+      "state": "merged"
     }
   }
 }
