@@ -82,7 +82,32 @@ describe('list adapters for subscription types', () => {
       type: 'issue-detail',
       params: { id: 'UI-123' }
     });
-    expect(args).toEqual(['show', 'UI-123', '--json', '--include-dependents']);
+    expect(args).toEqual(['show', 'UI-123', '--json']);
+  });
+
+  // FORK-LOCAL DIVERGENCE FROM UPSTREAM — see ds-673 and the dev-services CLAUDE.md gotcha.
+  //
+  // Upstream #94 (bc972a2) added `--include-dependents` to the issue-detail call. That
+  // flag does not exist in bd 1.0.3, which is what our deployment runs, so bd exits with
+  // `unknown flag: --include-dependents` on EVERY issue-detail fetch. The client then gets
+  // no children at all: the Epics tab renders epics with no children, the inline epic view
+  // expands to nothing, and issues with a parent epic vanish from the Issues list entirely
+  // (they are filtered out of the top level in anticipation of a nested render that never
+  // arrives).
+  //
+  // bd 1.0.3's plain `bd show <id> --json` already includes `dependents`, so dropping the
+  // flag restores children. bd 1.1.x made dependent-streaming opt-in behind the flag, which
+  // is why upstream needs it and we must not have it.
+  //
+  // REVERT once the deployed bd is >= 1.1.0 (tracked as dc-ytn). Until then this stays on
+  // preview/local ONLY and must never reach a PR branch.
+  test('issue-detail args stay compatible with bd 1.0.3 (no --include-dependents)', () => {
+    const args = mapSubscriptionToBdArgs({
+      type: 'issue-detail',
+      params: { id: 'UI-123' }
+    });
+    expect(args).not.toContain('--include-dependents');
+    expect(args).toEqual(['show', 'UI-123', '--json']);
   });
 
   test('fetchListForSubscription returns normalized items (Date.parse)', async () => {

@@ -70,7 +70,11 @@ export function mapSubscriptionToBdArgs(spec) {
       if (id.length === 0) {
         throw badRequest('Missing param: params.id');
       }
-      return ['show', id, '--json', '--include-dependents'];
+      // FORK-LOCAL: upstream #94 appends `--include-dependents` here. bd 1.0.3 (our
+      // deployed CLI) has no such flag and errors out, which silently starves every
+      // view of epic children. Its plain `--json` already returns `dependents`.
+      // Revert to upstream's form once the deployed bd is >= 1.1.0 (dc-ytn).
+      return ['show', id, '--json'];
     }
     default: {
       throw badRequest(`Unknown subscription type: ${t}`);
