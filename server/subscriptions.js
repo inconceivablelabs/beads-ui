@@ -5,13 +5,18 @@
  * Server-side subscription registry for list-like data.
  *
  * Maintains per-subscription entries keyed by a stable string derived from
- * `{ type, params }`. Each entry stores:
+ * `{ type, params }` *and* the workspace the subscription belongs to. The
+ * workspace is part of the key so that two connections viewing different
+ * workspaces never share an entry (and never see each other's issues), while
+ * two connections on the *same* workspace still share one entry and one bd
+ * invocation. Each entry stores:
+ *  - `workspace`: root dir the entry's data was fetched from ('' when unscoped)
  *  - `itemsById`: Map<string, { updated_at: number, closed_at: number|null }>
  *  - `subscribers`: Set<WebSocket>
  *  - `lock`: Promise chain to serialize refresh/update operations per key
  *
- * No TTL eviction; entries are swept when sockets disconnect (and only when
- * that leaves the subscriber set empty).
+ * No TTL eviction; entries are swept when sockets disconnect or release their
+ * subscriptions (and only when that leaves the subscriber set empty).
  */
 
 /**
@@ -27,6 +32,7 @@
 
 /**
  * @typedef {{
+ *   workspace: string,
  *   itemsById: Map<string, ItemMeta>,
  *   subscribers: Set<WebSocket>,
  *   lock: Promise<void>
@@ -34,12 +40,15 @@
  */
 
 /**
- * Create a new, empty entry object.
+ * Create a new, empty entry object for a key. The workspace is derived from
+ * the key so every creation path agrees on which workspace an entry holds.
  *
+ * @param {string} key
  * @returns {Entry}
  */
-function createEntry() {
+function createEntry(key) {
   return {
+    workspace: workspaceOfKey(key),
     itemsById: new Map(),
     subscribers: new Set(),
     lock: Promise.resolve()
@@ -47,12 +56,22 @@ function createEntry() {
 }
 
 /**
- * Generate a stable subscription key string from a spec. Sorts params keys.
+ * Separator between the encoded workspace prefix and the spec part of a key.
+ * `|` cannot occur in the spec part: types come from a fixed allowlist and
+ * `URLSearchParams` percent-encodes it in params.
+ */
+const WORKSPACE_SEP = '|';
+
+/**
+ * Generate a stable subscription key string from a spec and the workspace it
+ * is scoped to. Sorts params keys. Omitting `workspace` yields the unscoped
+ * key, which keeps single-workspace callers (and their keys) unchanged.
  *
  * @param {SubscriptionSpec} spec
+ * @param {string} [workspace] - Workspace root dir this subscription reads.
  * @returns {string}
  */
-export function keyOf(spec) {
+export function keyOf(spec, workspace) {
   const type = String(spec.type || '').trim();
   /** @type {Record<string, string>} */
   const flat = {};
@@ -64,7 +83,31 @@ export function keyOf(spec) {
     }
   }
   const enc = new URLSearchParams(flat).toString();
-  return enc.length > 0 ? `${type}?${enc}` : type;
+  const base = enc.length > 0 ? `${type}?${enc}` : type;
+  const root = String(workspace || '').trim();
+  if (root.length === 0) {
+    return base;
+  }
+  return `${encodeURIComponent(root)}${WORKSPACE_SEP}${base}`;
+}
+
+/**
+ * Recover the workspace root dir a key is scoped to ('' when unscoped).
+ *
+ * @param {string} key
+ * @returns {string}
+ */
+export function workspaceOfKey(key) {
+  const s = String(key || '');
+  const i = s.indexOf(WORKSPACE_SEP);
+  if (i < 0) {
+    return '';
+  }
+  try {
+    return decodeURIComponent(s.slice(0, i));
+  } catch {
+    return s.slice(0, i);
+  }
 }
 
 /**
@@ -147,16 +190,17 @@ export class SubscriptionRegistry {
   }
 
   /**
-   * Ensure an entry exists for a spec; returns the key and entry.
+   * Ensure an entry exists for a spec in a workspace; returns key and entry.
    *
    * @param {SubscriptionSpec} spec
+   * @param {string} [workspace] - Workspace root dir this subscription reads.
    * @returns {{ key: string, entry: Entry }}
    */
-  ensure(spec) {
-    const key = keyOf(spec);
+  ensure(spec, workspace) {
+    const key = keyOf(spec, workspace);
     let entry = this._entries.get(key);
     if (!entry) {
-      entry = createEntry();
+      entry = createEntry(key);
       this._entries.set(key, entry);
     }
     return { key, entry };
@@ -167,24 +211,26 @@ export class SubscriptionRegistry {
    *
    * @param {SubscriptionSpec} spec
    * @param {WebSocket} ws
+   * @param {string} [workspace] - Workspace root dir this subscription reads.
    * @returns {{ key: string, subscribed: true }}
    */
-  attach(spec, ws) {
-    const { key, entry } = this.ensure(spec);
+  attach(spec, ws, workspace) {
+    const { key, entry } = this.ensure(spec, workspace);
     entry.subscribers.add(ws);
     return { key, subscribed: true };
   }
 
   /**
    * Detach a subscriber from the spec. Keeps entry even if empty; eviction
-   * is handled by `onDisconnect` sweep.
+   * is handled by the `onDisconnect` / `releaseSubscriber` sweep.
    *
    * @param {SubscriptionSpec} spec
    * @param {WebSocket} ws
+   * @param {string} [workspace] - Workspace root dir this subscription reads.
    * @returns {boolean} true when the subscriber was removed
    */
-  detach(spec, ws) {
-    const key = keyOf(spec);
+  detach(spec, ws, workspace) {
+    const key = keyOf(spec, workspace);
     const entry = this._entries.get(key);
     if (!entry) {
       return false;
@@ -193,12 +239,14 @@ export class SubscriptionRegistry {
   }
 
   /**
-   * On socket disconnect, remove it from all subscriber sets and evict any
-   * entries that become empty as a result of this sweep.
+   * Remove a socket from all subscriber sets and evict any entries that become
+   * empty as a result. Used both on disconnect and when a connection drops its
+   * subscriptions (for example after switching workspace): entries that still
+   * have other subscribers — on any workspace — are left untouched.
    *
    * @param {WebSocket} ws
    */
-  onDisconnect(ws) {
+  releaseSubscriber(ws) {
     /** @type {string[]} */
     const empties = [];
     for (const [key, entry] of this._entries) {
@@ -213,6 +261,15 @@ export class SubscriptionRegistry {
   }
 
   /**
+   * On socket disconnect, sweep it out of the registry.
+   *
+   * @param {WebSocket} ws
+   */
+  onDisconnect(ws) {
+    this.releaseSubscriber(ws);
+  }
+
+  /**
    * Serialize a function against a key so only one runs at a time per key.
    *
    * @template T
@@ -223,7 +280,7 @@ export class SubscriptionRegistry {
   async withKeyLock(key, fn) {
     let entry = this._entries.get(key);
     if (!entry) {
-      entry = createEntry();
+      entry = createEntry(key);
       this._entries.set(key, entry);
     }
     // Chain onto the existing lock
@@ -263,7 +320,7 @@ export class SubscriptionRegistry {
   applyNextMap(key, next_map) {
     let entry = this._entries.get(key);
     if (!entry) {
-      entry = createEntry();
+      entry = createEntry(key);
       this._entries.set(key, entry);
     }
     const prev = entry.itemsById;
@@ -285,7 +342,9 @@ export class SubscriptionRegistry {
   }
 
   /**
-   * Clear all entries from the registry. Used when switching workspaces.
+   * Clear every entry, for every workspace and every connection. A blunt
+   * reset; a workspace switch must not use it because it would destroy other
+   * connections' subscriptions — use `releaseSubscriber` for that.
    * Does not close WebSocket connections; they will re-subscribe on refresh.
    */
   clear() {

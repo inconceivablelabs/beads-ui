@@ -18,6 +18,11 @@ vi.mock('./list-adapters.js', () => ({
   })
 }));
 
+// Registry keys are workspace-scoped. These connections never send
+// `set-workspace`, so they inherit the server default, which `attachWsServer`
+// resolves to `process.cwd()` when no `root_dir` option is given.
+const default_root = process.cwd();
+
 describe('ws list subscriptions', () => {
   test('refresh emits upsert/delete after subscribe', async () => {
     vi.useFakeTimers();
@@ -128,7 +133,7 @@ describe('ws list subscriptions', () => {
     expect(Array.isArray(snapshot_envelope.payload.issues)).toBe(true);
     expect(snapshot_envelope.payload.issues.length).toBeGreaterThan(0);
 
-    const key = keyOf({ type: 'in-progress-issues' });
+    const key = keyOf({ type: 'in-progress-issues' }, default_root);
     const entry = registry.get(key);
     const before_size = entry ? entry.subscribers.size : 0;
     expect(before_size).toBeGreaterThanOrEqual(1);
@@ -201,7 +206,7 @@ describe('ws list subscriptions', () => {
       )
     );
 
-    const key = keyOf({ type: 'all-issues' });
+    const key = keyOf({ type: 'all-issues' }, default_root);
     const entry = registry.get(key);
     const before = entry ? entry.subscribers.size : 0;
     expect(before).toBeGreaterThanOrEqual(1);
@@ -262,7 +267,10 @@ describe('ws list subscriptions', () => {
       )
     );
 
-    const key = keyOf({ type: 'closed-issues', params: { since } });
+    const key = keyOf(
+      { type: 'closed-issues', params: { since } },
+      default_root
+    );
     const entry = registry.get(key);
     const ids = entry ? Array.from(entry.itemsById.keys()).sort() : [];
     expect(ids).toEqual(['recent']);
