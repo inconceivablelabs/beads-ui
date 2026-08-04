@@ -108,12 +108,15 @@ function triggerMutationRefreshOnce(timeout_ms = 500) {
 }
 
 /**
- * Collect unique active list subscription specs across all connected clients.
+ * Collect unique active list subscriptions across all connected clients.
+ * Uniqueness is by registry key, which is workspace-scoped: two connections on
+ * the same workspace collapse to one refresh, two on different workspaces do
+ * not.
  *
- * @returns {Array<{ type: string, params?: Record<string,string|number|boolean> }>}
+ * @returns {Array<{ spec: { type: string, params?: Record<string,string|number|boolean> }, workspace: string }>}
  */
 function collectActiveListSpecs() {
-  /** @type {Array<{ type: string, params?: Record<string,string|number|boolean> }>} */
+  /** @type {Array<{ spec: { type: string, params?: Record<string,string|number|boolean> }, workspace: string }>} */
   const specs = [];
   /** @type {Set<string>} */
   const seen = new Set();
@@ -129,10 +132,10 @@ function collectActiveListSpecs() {
     if (!s.list_subs) {
       continue;
     }
-    for (const { key, spec } of s.list_subs.values()) {
+    for (const { key, spec, workspace } of s.list_subs.values()) {
       if (!seen.has(key)) {
         seen.add(key);
-        specs.push(spec);
+        specs.push({ spec, workspace: workspace || '' });
       }
     }
   }
@@ -143,12 +146,12 @@ function collectActiveListSpecs() {
  * Run refresh for all active list subscription specs and publish deltas.
  */
 async function refreshAllActiveListSubscriptions() {
-  const specs = collectActiveListSpecs();
+  const subs = collectActiveListSpecs();
   // Run refreshes concurrently; locking is handled per key in the registry
   await Promise.all(
-    specs.map(async (spec) => {
+    subs.map(async ({ spec, workspace }) => {
       try {
-        await refreshAndPublish(spec);
+        await refreshAndPublish(spec, workspace);
       } catch {
         // ignore refresh errors per spec
       }
@@ -181,9 +184,14 @@ export function scheduleListRefresh() {
 }
 
 /**
+ * @typedef {{ root_dir: string, db_path: string }} Workspace
+ */
+
+/**
  * @typedef {{
  *   show_id?: string | null,
- *   list_subs?: Map<string, { key: string, spec: { type: string, params?: Record<string, string | number | boolean> } }>,
+ *   workspace?: Workspace | null,
+ *   list_subs?: Map<string, { key: string, spec: { type: string, params?: Record<string, string | number | boolean> } , workspace: string }>,
  *   list_revisions?: Map<string, number>
  * }} ConnectionSubs
  */
@@ -195,11 +203,13 @@ const SUBS = new WeakMap();
 let CURRENT_WSS = null;
 
 /**
- * Current workspace configuration.
+ * Default workspace for connections that have not chosen one themselves.
+ * Connections that send `set-workspace` get their own workspace instead; see
+ * `workspaceOf`. Never mutate this from a per-connection code path.
  *
- * @type {{ root_dir: string, db_path: string } | null}
+ * @type {Workspace | null}
  */
-let CURRENT_WORKSPACE = null;
+let DEFAULT_WORKSPACE = null;
 
 /**
  * Reference to the database watcher for rebinding on workspace change.
@@ -219,12 +229,56 @@ function ensureSubs(ws) {
   if (!s) {
     s = {
       show_id: null,
+      workspace: null,
       list_subs: new Map(),
       list_revisions: new Map()
     };
     SUBS.set(ws, s);
   }
   return s;
+}
+
+/**
+ * The workspace this connection reads and writes. Connections that never sent
+ * `set-workspace` follow the server default.
+ *
+ * @param {WebSocket} ws
+ * @returns {Workspace | null}
+ */
+function workspaceOf(ws) {
+  return ensureSubs(ws).workspace || DEFAULT_WORKSPACE;
+}
+
+/**
+ * Workspace root dir for a connection, or `undefined` when unknown (which
+ * leaves bd to fall back to `process.cwd()`).
+ *
+ * @param {WebSocket} ws
+ * @returns {string | undefined}
+ */
+function workspaceRootOf(ws) {
+  return workspaceOf(ws)?.root_dir;
+}
+
+/**
+ * Drop every list subscription held by a connection: detach it from the
+ * registry (evicting entries only when no other connection subscribes) and
+ * forget its client ids. Used when a connection changes workspace — its
+ * subscriptions point at the workspace it just left.
+ *
+ * Revisions are deliberately kept so that per-client revision numbers stay
+ * monotonic across a workspace switch.
+ *
+ * @param {WebSocket} ws
+ */
+function releaseListSubscriptions(ws) {
+  const s = ensureSubs(ws);
+  try {
+    registry.releaseSubscriber(ws);
+  } catch {
+    // ignore registry sweep errors
+  }
+  s.list_subs?.clear();
 }
 
 /**
@@ -339,12 +393,13 @@ function emitSubscriptionDelete(ws, client_id, key, issue_id) {
  * per-subscription full-issue envelopes to subscribers. Serialized per key.
  *
  * @param {{ type: string, params?: Record<string, string|number|boolean> }} spec
+ * @param {string} [workspace] - Workspace root dir the subscription belongs to.
  */
-async function refreshAndPublish(spec) {
-  const key = keyOf(spec);
+async function refreshAndPublish(spec, workspace) {
+  const key = keyOf(spec, workspace);
   await registry.withKeyLock(key, async () => {
     const res = await fetchListForSubscription(spec, {
-      cwd: CURRENT_WORKSPACE?.root_dir
+      cwd: workspace || undefined
     });
     if (!res.ok) {
       log('refresh failed for %s: %s %o', key, res.error.message, res.error);
@@ -431,10 +486,10 @@ function applyClosedIssuesFilter(spec, items) {
 export function attachWsServer(http_server, options = {}) {
   const ws_path = options.path || '/ws';
 
-  // Initialize workspace state
+  // Initialize the default workspace inherited by new connections
   const initial_root = options.root_dir || process.cwd();
   const initial_db = resolveWorkspaceDatabase({ cwd: initial_root });
-  CURRENT_WORKSPACE = {
+  DEFAULT_WORKSPACE = {
     root_dir: initial_root,
     db_path: initial_db.path
   };
@@ -520,7 +575,12 @@ export function attachWsServer(http_server, options = {}) {
   }
 
   /**
-   * Change the current workspace and rebind the database watcher.
+   * Move the server's *default* workspace and rebind the database watcher.
+   *
+   * Connections that made an explicit choice via the `set-workspace` message
+   * keep theirs; only connections still following the default are moved, and
+   * their list subscriptions are released so they re-subscribe against the new
+   * workspace after the broadcast.
    *
    * @param {string} new_root_dir - Absolute path to the new workspace root.
    * @returns {{ changed: boolean, workspace: { root_dir: string, db_path: string } }}
@@ -528,9 +588,9 @@ export function attachWsServer(http_server, options = {}) {
   function setWorkspace(new_root_dir) {
     const resolved_root = path.resolve(new_root_dir);
     const new_db = resolveWorkspaceDatabase({ cwd: resolved_root });
-    const old_path = CURRENT_WORKSPACE?.db_path || '';
+    const old_path = DEFAULT_WORKSPACE?.db_path || '';
 
-    CURRENT_WORKSPACE = {
+    DEFAULT_WORKSPACE = {
       root_dir: resolved_root,
       db_path: new_db.path
     };
@@ -538,24 +598,29 @@ export function attachWsServer(http_server, options = {}) {
     const changed = new_db.path !== old_path;
 
     if (changed) {
-      log('workspace changed: %s → %s', old_path, new_db.path);
+      log('default workspace changed: %s → %s', old_path, new_db.path);
 
       // Rebind the database watcher to the new workspace
       if (DB_WATCHER) {
         DB_WATCHER.rebind({ root_dir: resolved_root });
       }
 
-      // Clear existing registry entries and refresh all subscriptions
-      registry.clear();
+      // Release subscriptions of the connections that follow the default;
+      // connections pinned to their own workspace keep theirs.
+      for (const ws of wss.clients) {
+        if (!ensureSubs(ws).workspace) {
+          releaseListSubscriptions(ws);
+        }
+      }
 
       // Broadcast workspace-changed event to all clients
-      broadcast('workspace-changed', CURRENT_WORKSPACE);
+      broadcast('workspace-changed', DEFAULT_WORKSPACE);
 
       // Schedule refresh of all active list subscriptions
       scheduleListRefresh();
     }
 
-    return { changed, workspace: CURRENT_WORKSPACE };
+    return { changed, workspace: DEFAULT_WORKSPACE };
   }
 
   return {
@@ -603,11 +668,12 @@ export async function handleMessage(ws, data) {
 
   const req = json;
 
-  // Pin every bd invocation made during this message to the active workspace.
-  // Without this, runBd/runBdJson fall back to process.cwd() and bd reports
-  // "no beads database found" for any workspace selected via set-workspace.
-  // See mantoni/beads-ui#87.
-  const bd_options = { cwd: CURRENT_WORKSPACE?.root_dir };
+  // Pin every bd invocation made during this message to *this connection's*
+  // workspace. Without the cwd, runBd/runBdJson fall back to process.cwd() and
+  // bd reports "no beads database found" for any workspace selected via
+  // set-workspace (see mantoni/beads-ui#87); without the per-connection
+  // lookup, one client's switch would redirect every other client's writes.
+  const bd_options = { cwd: workspaceRootOf(ws) };
 
   // Dispatch known types here as we implement them. For now, only a ping utility.
   if (req.type === /** @type {MessageType} */ ('ping')) {
@@ -630,7 +696,10 @@ export async function handleMessage(ws, data) {
     }
     const client_id = validation.id;
     const spec = validation.spec;
-    const key = keyOf(spec);
+    // The subscription belongs to the workspace this connection is on; it is
+    // part of the registry key so other workspaces cannot collide with it.
+    const sub_workspace = workspaceRootOf(ws) || '';
+    const key = keyOf(spec, sub_workspace);
 
     /**
      * Reply with an error and avoid attaching the subscription when
@@ -648,7 +717,7 @@ export async function handleMessage(ws, data) {
     let initial = null;
     try {
       initial = await fetchListForSubscription(spec, {
-        cwd: CURRENT_WORKSPACE?.root_dir
+        cwd: sub_workspace || undefined
       });
     } catch (err) {
       log('subscribe-list snapshot error for %s: %o', key, err);
@@ -671,8 +740,12 @@ export async function handleMessage(ws, data) {
     }
 
     const s = ensureSubs(ws);
-    const { key: attached_key } = registry.attach(spec, ws);
-    s.list_subs?.set(client_id, { key: attached_key, spec });
+    const { key: attached_key } = registry.attach(spec, ws, sub_workspace);
+    s.list_subs?.set(client_id, {
+      key: attached_key,
+      spec,
+      workspace: sub_workspace
+    });
 
     try {
       await registry.withKeyLock(attached_key, async () => {
@@ -687,7 +760,7 @@ export async function handleMessage(ws, data) {
       log('subscribe-list snapshot error for %s: %o', attached_key, err);
       s.list_subs?.delete(client_id);
       try {
-        registry.detach(spec, ws);
+        registry.detach(spec, ws, sub_workspace);
       } catch {
         // ignore detach errors
       }
@@ -716,7 +789,7 @@ export async function handleMessage(ws, data) {
     let removed = false;
     if (sub) {
       try {
-        removed = registry.detach(sub.spec, ws);
+        removed = registry.detach(sub.spec, ws, sub.workspace);
       } catch {
         removed = false;
       }
@@ -1332,17 +1405,17 @@ export async function handleMessage(ws, data) {
       JSON.stringify(
         makeOk(req, {
           workspaces,
-          current: CURRENT_WORKSPACE
+          current: workspaceOf(ws)
         })
       )
     );
     return;
   }
 
-  // get-workspace: returns the current workspace
+  // get-workspace: returns this connection's workspace
   if (req.type === 'get-workspace') {
     log('get-workspace');
-    ws.send(JSON.stringify(makeOk(req, CURRENT_WORKSPACE)));
+    ws.send(JSON.stringify(makeOk(req, workspaceOf(ws))));
     return;
   }
 
@@ -1366,11 +1439,13 @@ export async function handleMessage(ws, data) {
     // Resolve and validate the path
     const resolved = path.resolve(workspace_path);
 
-    // Update workspace (this will rebind watcher, clear registry, broadcast change)
+    // Switch only this connection. Other clients keep the workspace they are
+    // looking at; a shared global here silently redirected every one of them.
     const new_db = resolveWorkspaceDatabase({ cwd: resolved });
-    const old_path = CURRENT_WORKSPACE?.db_path || '';
+    const old_path = workspaceOf(ws)?.db_path || '';
 
-    CURRENT_WORKSPACE = {
+    const conn = ensureSubs(ws);
+    conn.workspace = {
       root_dir: resolved,
       db_path: new_db.path
     };
@@ -1379,7 +1454,7 @@ export async function handleMessage(ws, data) {
 
     if (changed) {
       log(
-        'workspace changed via set-workspace: %s → %s',
+        'connection workspace changed via set-workspace: %s → %s',
         old_path,
         new_db.path
       );
@@ -1389,10 +1464,12 @@ export async function handleMessage(ws, data) {
         DB_WATCHER.rebind({ root_dir: resolved });
       }
 
-      // Clear existing registry entries
-      registry.clear();
+      // Drop this connection's subscriptions on the workspace it just left.
+      // Entries still used by other connections survive; the client
+      // re-subscribes once it sees `changed: true`.
+      releaseListSubscriptions(ws);
 
-      // Schedule refresh of all active list subscriptions
+      // Schedule refresh of all remaining active list subscriptions
       scheduleListRefresh();
     }
 
@@ -1400,7 +1477,7 @@ export async function handleMessage(ws, data) {
       JSON.stringify(
         makeOk(req, {
           changed,
-          workspace: CURRENT_WORKSPACE
+          workspace: conn.workspace
         })
       )
     );

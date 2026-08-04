@@ -453,14 +453,15 @@ describe('ws mutation handlers', () => {
     expect(obj.payload && obj.payload.created).toBe(true);
   });
 
-  test('write handlers run bd in the active workspace cwd', async () => {
+  test('write handlers run bd in the connection workspace cwd', async () => {
     const mRun = /** @type {import('vitest').Mock} */ (runBd);
     const mJson = /** @type {import('vitest').Mock} */ (runBdJson);
 
-    // Set the active workspace first.
-    const ws_setup = makeStubSocket();
+    // The workspace belongs to the connection, so the mutation has to be sent
+    // on the same socket that selected it.
+    const ws = makeStubSocket();
     await handleMessage(
-      /** @type {any} */ (ws_setup),
+      /** @type {any} */ (ws),
       Buffer.from(
         JSON.stringify({
           id: 'sw',
@@ -475,7 +476,6 @@ describe('ws mutation handlers', () => {
       code: 0,
       stdoutJson: { id: 'UI-7', status: 'in_progress' }
     });
-    const ws = makeStubSocket();
     const req = {
       id: 'r-cwd',
       type: 'update-status',
@@ -492,14 +492,13 @@ describe('ws mutation handlers', () => {
     );
   });
 
-  test('update-type runs bd in the active workspace cwd', async () => {
+  test('update-type runs bd in the connection workspace cwd', async () => {
     const mRun = /** @type {import('vitest').Mock} */ (runBd);
     const mJson = /** @type {import('vitest').Mock} */ (runBdJson);
 
-    // Set the active workspace first.
-    const ws_setup = makeStubSocket();
+    const ws = makeStubSocket();
     await handleMessage(
-      /** @type {any} */ (ws_setup),
+      /** @type {any} */ (ws),
       Buffer.from(
         JSON.stringify({
           id: 'sw',
@@ -514,7 +513,6 @@ describe('ws mutation handlers', () => {
       code: 0,
       stdoutJson: { id: 'UI-7', issue_type: 'feature' }
     });
-    const ws = makeStubSocket();
     const req = {
       id: 'r-cwd-type',
       type: 'update-type',
