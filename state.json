@@ -1,15 +1,17 @@
 {
   "tracking_issue_number": 1,
-  "prs": {
-    "100": {
-      "last_activity_id": "5125558329",
-      "last_activity_at": "2026-08-01T20:58:08Z",
-      "state": "merged"
+  "watched": {
+    "89": {
+      "kind": "pr",
+      "last_activity_id": "5186779547",
+      "last_activity_at": "2026-08-05T02:18:51Z",
+      "state": "open"
     },
-    "91": {
-      "last_activity_id": "5084247607",
-      "last_activity_at": "2026-07-29T13:21:48Z",
-      "state": "merged"
+    "106": {
+      "kind": "issue",
+      "last_activity_id": "issue-106-updated-2026-08-05T02:06:17Z",
+      "last_activity_at": "2026-08-05T02:06:17Z",
+      "state": "open"
     }
   }
 }
