@@ -1197,9 +1197,13 @@ describe('views/list', () => {
     expect(chevron?.getAttribute('aria-expanded')).toBe('false');
   });
 
-  test('clicking epic title (not chevron) navigates instead of expanding', async () => {
-    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
-    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+  /**
+   * Seed one epic row and mount the list against a recording transport.
+   *
+   * @param {HTMLElement} mount - The container element.
+   * @param {any[]} sent - Array that receives [type, payload] per call.
+   */
+  async function mountSingleEpic(mount, sent) {
     const stores = createTestIssueStores();
     stores.getStore('tab:issues').applyPush({
       type: 'snapshot',
@@ -1223,27 +1227,107 @@ describe('views/list', () => {
     });
     const view = createListView(
       mount,
-      async () => null,
+      /**
+       * @param {string} type - Message type.
+       * @param {any} payload - Message payload.
+       */
+      async (type, payload) => {
+        sent.push([type, payload]);
+        return null;
+      },
       () => {},
       undefined,
       undefined,
       stores
     );
     await view.load();
+    return view;
+  }
 
-    // Title text uses a span (no inline edit on epic rows — title_renderer
-    // emits a plain text span); clicking it should bubble to the row click
-    // handler and navigate, NOT expand the epic.
-    const titleText = mount.querySelector(
-      '[data-issue-id="X-1"] .epic-title-text'
+  test('epic row title edits inline like every other row', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    /** @type {any[]} */
+    const sent = [];
+    await mountSingleEpic(mount, sent);
+
+    const editable = /** @type {HTMLElement} */ (
+      mount.querySelector('[data-issue-id="X-1"] .epic-title-cell .editable')
     );
-    expect(titleText).toBeTruthy();
+    expect(editable).toBeTruthy();
+    editable.click();
+    await Promise.resolve();
+
+    const input = /** @type {HTMLInputElement} */ (
+      mount.querySelector('[data-issue-id="X-1"] .epic-title-cell input')
+    );
+    expect(input).toBeTruthy();
+    input.value = 'Renamed epic';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sent).toContainEqual([
+      'edit-text',
+      { id: 'X-1', field: 'title', value: 'Renamed epic' }
+    ]);
+  });
+
+  test('editing an epic title does not expand the epic', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    /** @type {any[]} */
+    const sent = [];
+    await mountSingleEpic(mount, sent);
+
     const chevron = mount.querySelector('[data-issue-id="X-1"] .epic-chevron');
     expect(chevron?.getAttribute('aria-expanded')).toBe('false');
 
-    // Click title — should NOT expand (chevron's click target is independent)
-    /** @type {HTMLElement} */ (titleText).click();
+    /** @type {HTMLElement} */ (
+      mount.querySelector('[data-issue-id="X-1"] .epic-title-cell .editable')
+    ).click();
     await Promise.resolve();
-    expect(chevron?.getAttribute('aria-expanded')).toBe('false');
+
+    expect(
+      mount
+        .querySelector('[data-issue-id="X-1"] .epic-chevron')
+        ?.getAttribute('aria-expanded')
+    ).toBe('false');
+  });
+
+  test('the chevron still expands while the title is editable', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    /** @type {any[]} */
+    const sent = [];
+    await mountSingleEpic(mount, sent);
+
+    /** @type {HTMLElement} */ (
+      mount.querySelector('[data-issue-id="X-1"] .epic-chevron')
+    ).click();
+    await Promise.resolve();
+
+    expect(
+      mount
+        .querySelector('[data-issue-id="X-1"] .epic-chevron')
+        ?.getAttribute('aria-expanded')
+    ).toBe('true');
+    expect(
+      mount.querySelector('[data-issue-id="X-1"] .epic-title-cell input')
+    ).toBeFalsy();
+  });
+
+  test('the epic progress bar survives the editable title', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    /** @type {any[]} */
+    const sent = [];
+    await mountSingleEpic(mount, sent);
+
+    const progress = mount.querySelector(
+      '[data-issue-id="X-1"] .epic-progress progress'
+    );
+    expect(progress).toBeTruthy();
+    expect(progress?.getAttribute('max')).toBe('1');
   });
 });

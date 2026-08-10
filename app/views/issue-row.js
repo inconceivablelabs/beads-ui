@@ -26,7 +26,7 @@ import {
  *   requestRender: () => void,
  *   getSelectedId?: () => string | null,
  *   row_class?: string,
- *   title_renderer?: (it: IssueRowData) => import('lit-html').TemplateResult<1>
+ *   title_renderer?: (it: IssueRowData, title_cell: import('lit-html').TemplateResult<1>) => import('lit-html').TemplateResult<1>
  * }} options
  * @returns {(it: IssueRowData) => import('lit-html').TemplateResult<1>}
  */
@@ -174,7 +174,7 @@ export function createIssueRowRenderer(options) {
       </td>
       <td role="gridcell">
         ${title_renderer
-          ? title_renderer(it)
+          ? title_renderer(it, editableText(it.id, 'title', it.title || ''))
           : editableText(it.id, 'title', it.title || '')}
       </td>
       <td role="gridcell">
