@@ -34,7 +34,7 @@ import { createIssueRowRenderer } from './issue-row.js';
  *   subscribeList?: (client_id: string, spec: { type: string, params?: Record<string, string|number|boolean> }) => Promise<() => Promise<void>>
  * }} [subscriptions]
  * @param {{ snapshotFor?: (client_id: string) => any[], subscribe?: (fn: () => void) => () => void }} [issueStores]
- * @returns {{ load: () => Promise<void>, destroy: () => void }} View API.
+ * @returns {{ load: () => Promise<void>, releaseEpicSubscriptions: () => Promise<void>, destroy: () => void }} View API.
  */
 /**
  * Create the Issues List view.
@@ -48,7 +48,7 @@ import { createIssueRowRenderer } from './issue-row.js';
  *   subscribeList?: (client_id: string, spec: { type: string, params?: Record<string, string|number|boolean> }) => Promise<() => Promise<void>>
  * }} [subscriptions]
  * @param {{ snapshotFor?: (client_id: string) => any[], subscribe?: (fn: () => void) => () => void }} [issue_stores]
- * @returns {{ load: () => Promise<void>, destroy: () => void }}
+ * @returns {{ load: () => Promise<void>, releaseEpicSubscriptions: () => Promise<void>, destroy: () => void }}
  */
 export function createListView(
   mount_element,
@@ -75,6 +75,14 @@ export function createListView(
   const loading = new Set();
   /** @type {Map<string, () => Promise<void>>} */
   const epic_unsubs = new Map();
+  /**
+   * Epics whose `detail:<id>` store is currently registered. Tracked apart
+   * from `epic_unsubs` because registration happens before the subscribe call
+   * and outlives it when that call fails.
+   *
+   * @type {Set<string>}
+   */
+  const epic_registrations = new Set();
   /** @type {null | (() => void)} */
   let unsubscribe = null;
   let status_dropdown_open = false;
@@ -122,15 +130,20 @@ export function createListView(
     row_class: 'issue-row epic-child-row'
   });
 
-  // Epic rows use the canonical pipeline but inject a custom title cell
-  // (chevron + title text + progress bar). Only the chevron toggles expand.
+  // Epic rows use the canonical pipeline but wrap the title cell with a
+  // chevron and a progress bar. The canonical cell is passed in rather than
+  // rebuilt, so epic titles keep the same inline editing every other row has;
+  // only the chevron toggles expand.
   const epic_row_renderer = createIssueRowRenderer({
     navigate: navigateToIssue,
     onUpdate: updateInline,
     requestRender: doRender,
     getSelectedId: () => selected_id,
     row_class: 'issue-row epic-row-inline',
-    title_renderer: /** @param {{ id: string, title?: string }} it */ (it) => {
+    title_renderer: /**
+     * @param {{ id: string, title?: string }} it
+     * @param {import('lit-html').TemplateResult<1>} title_cell
+     */ (it, title_cell) => {
       const id = String(it.id);
       const is_open = expanded.has(id);
       const { total, closed } = getEpicCounters(id);
@@ -160,7 +173,7 @@ export function createListView(
             }
             >${is_open ? '▾' : '▸'}</span
           >
-          <span class="epic-title-text">${it.title || ''}</span>
+          <span class="epic-title-text">${title_cell}</span>
           <span class="epic-progress">
             <progress value=${closed} max=${Math.max(1, total)}></progress>
             <span class="muted mono">${closed}/${total}</span>
@@ -714,6 +727,37 @@ export function createListView(
   }
 
   /**
+   * Tear down one epic's detail subscription and store registration.
+   *
+   * Safe to call for an epic that holds neither: a subscribe that failed has
+   * already been released here, and calling again must not report a second
+   * unregister to the caller.
+   *
+   * @param {string} epic_id
+   */
+  async function releaseEpic(epic_id) {
+    const u = epic_unsubs.get(epic_id);
+    if (u) {
+      epic_unsubs.delete(epic_id);
+      try {
+        await u();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (epic_registrations.has(epic_id)) {
+      epic_registrations.delete(epic_id);
+      if (issue_stores && /** @type {any} */ (issue_stores).unregister) {
+        try {
+          /** @type {any} */ (issue_stores).unregister(`detail:${epic_id}`);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  /**
    * Toggle expanded state for an epic row.
    *
    * @param {string} epic_id
@@ -734,6 +778,7 @@ export function createListView(
               params: { id: epic_id }
             });
           }
+          epic_registrations.add(epic_id);
           const u = await /** @type {any} */ (subscriptions).subscribeList(
             `detail:${epic_id}`,
             {
@@ -743,29 +788,42 @@ export function createListView(
           );
           epic_unsubs.set(epic_id, u);
         } catch {
-          // ignore subscription failures
+          // The store is registered before the subscribe call, so a rejection
+          // leaves it registered with nothing behind it. Release it here or it
+          // survives until the view is torn down. The epic stays expanded so
+          // `classifyEmptyEpic` can report the failure to the user.
+          await releaseEpic(epic_id);
         }
       }
       loading.delete(epic_id);
     } else {
       expanded.delete(epic_id);
-      const u = epic_unsubs.get(epic_id);
-      if (u) {
-        try {
-          await u();
-        } catch {
-          /* ignore */
-        }
-        epic_unsubs.delete(epic_id);
-      }
-      if (issue_stores && /** @type {any} */ (issue_stores).unregister) {
-        try {
-          /** @type {any} */ (issue_stores).unregister(`detail:${epic_id}`);
-        } catch {
-          /* ignore */
-        }
-      }
+      await releaseEpic(epic_id);
     }
+    doRender();
+  }
+
+  /**
+   * Release every expanded epic's detail subscription and collapse the tree.
+   *
+   * Owned by the caller that owns the route and the workspace: these
+   * subscriptions are scoped to the Issues view and to the workspace that was
+   * current when they opened, and neither scope is visible from in here.
+   */
+  async function releaseEpicSubscriptions() {
+    const ids = new Set([
+      ...expanded,
+      ...epic_unsubs.keys(),
+      ...epic_registrations
+    ]);
+    if (ids.size === 0) {
+      return;
+    }
+    for (const id of ids) {
+      await releaseEpic(id);
+    }
+    expanded.clear();
+    loading.clear();
     doRender();
   }
 
@@ -981,16 +1039,9 @@ export function createListView(
 
   return {
     load,
+    releaseEpicSubscriptions,
     destroy() {
-      for (const u of epic_unsubs.values()) {
-        try {
-          void u();
-        } catch {
-          /* ignore */
-        }
-      }
-      epic_unsubs.clear();
-      expanded.clear();
+      void releaseEpicSubscriptions();
       mount_element.replaceChildren();
       document.removeEventListener('click', clickOutsideHandler);
       if (unsubscribe) {

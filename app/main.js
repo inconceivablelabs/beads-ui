@@ -158,6 +158,10 @@ export function bootstrap(root_element) {
      */
     async function clearAndResubscribe() {
       log('clearing all subscriptions for workspace switch');
+      // Expanded epics carry `detail:<id>` subscriptions keyed to the OLD
+      // workspace's issue ids. The store ids are per-epic, so the fixed list
+      // below cannot name them; the view releases its own.
+      await issues_view.releaseEpicSubscriptions();
       // Unsubscribe from server-side subscriptions first
       if (unsub_issues_tab) {
         void unsub_issues_tab().catch(() => {});
@@ -745,14 +749,23 @@ export function bootstrap(root_element) {
               pending_subscriptions.delete(issues_sub_key);
             });
         }
-      } else if (unsub_issues_tab) {
-        void unsub_issues_tab().catch(() => {});
-        unsub_issues_tab = null;
-        last_issues_spec_key = null;
-        try {
-          sub_issue_stores.unregister('tab:issues');
-        } catch (err) {
-          log('unregister issues store failed: %o', err);
+      } else {
+        // Expanded epics hold their own `detail:<id>` subscriptions. They are
+        // scoped to this view, so the route releases them here rather than
+        // leaving them open behind a hidden tab. Not gated on
+        // `unsub_issues_tab`: an epic can be expanded from a render that the
+        // issues subscription never backed, and that is exactly the case the
+        // gate would skip.
+        void issues_view.releaseEpicSubscriptions();
+        if (unsub_issues_tab) {
+          void unsub_issues_tab().catch(() => {});
+          unsub_issues_tab = null;
+          last_issues_spec_key = null;
+          try {
+            sub_issue_stores.unregister('tab:issues');
+          } catch (err) {
+            log('unregister issues store failed: %o', err);
+          }
         }
       }
 
