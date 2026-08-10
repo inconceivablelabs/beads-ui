@@ -770,8 +770,30 @@ export function bootstrap(root_element) {
       }
 
       // Epics tab
-      // Keep tab:epics open for Issues view too — Issues renderer looks up
-      // epic progress counters from this snapshot.
+      // Held open for Issues too: the epic rows read their progress counters
+      // (total_children / closed_children) from this snapshot.
+      //
+      // Cost of that extension, measured 2026-08-10 against synthetic
+      // workspaces (median of 5, warm):
+      //
+      //     issues/epics   bd list (already running)   bd epic status (added)
+      //     50 / 5                            915 ms                   402 ms
+      //     200 / 10                         1167 ms                   476 ms
+      //     523 / 20                         1259 ms                   469 ms
+      //
+      // The added call is cheaper than the one already running on this view
+      // and flat in workspace size, because `bd epic status` returns one row
+      // per epic rather than one per issue; the ~400 ms floor is bd process
+      // startup, not query work. Refreshes are event-driven off the DB
+      // watcher, so an idle tab costs nothing, `collectActiveListSpecs`
+      // dedupes by spec key so extra browser tabs do not multiply it, and
+      // `refreshAllActiveListSubscriptions` runs specs concurrently, so the
+      // wall-clock cost of a refresh is unchanged.
+      //
+      // The bound is that this is a second view, not every view: it is
+      // released on Board, and does not churn when switching between Issues
+      // and Epics. Both asserted in main.epics-subscription-scope.test.js and
+      // main.epics-subscription-churn.test.js.
       if (s.view === 'epics' || s.view === 'issues') {
         // Register store first to avoid race with initial snapshot
         try {
