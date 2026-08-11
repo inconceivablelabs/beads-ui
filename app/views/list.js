@@ -384,18 +384,20 @@ export function createListView(
   }
 
   /**
-   * Partition the (filtered ∪ expanded-epics) list into:
-   *  - epic_rows: items with issue_type === 'epic' (rendered with header + optional children)
-   *  - top_level_rows: non-epic items WHOSE PARENT IS NOT IN epic_ids
-   *  - (children of epics in epic_ids are rendered inline under their epic when expanded)
+   * Add back any expanded epic the filter excluded, so its (possibly matching)
+   * children stay reachable.
    *
-   * Recovers any expanded epic that the filter excluded — expanded epics
-   * always render so their (possibly-matching) children remain reachable.
+   * Runs BEFORE the sort rather than after the partition: a recovered epic is
+   * an ordinary row and has to be ordered by whatever comparator the list is
+   * currently using, not appended wherever the recovery happened to find it.
    *
-   * @param {Issue[]} filtered - Items that passed the top-level filter
-   * @param {Issue[]} all - The full issues_cache (used to recover expanded-but-filtered epics)
+   * @param {Issue[]} filtered - Items that passed the top-level filter.
+   * @param {Issue[]} all - The full issues_cache.
    */
-  function partitionForTree(filtered, all) {
+  function recoverExpandedEpics(filtered, all) {
+    if (expanded.size === 0) {
+      return filtered;
+    }
     const filtered_ids = new Set(filtered.map((it) => String(it.id)));
     /** @type {Issue[]} */
     const recovered = [];
@@ -406,30 +408,43 @@ export function createListView(
         recovered.push(ep);
       }
     }
-    const effective = filtered.concat(recovered);
+    return recovered.length === 0 ? filtered : filtered.concat(recovered);
+  }
 
+  /**
+   * Drop the rows that render nested under an epic instead of at top level,
+   * **preserving the order of the list handed in**.
+   *
+   * This used to return epics and non-epics as two lists which the caller
+   * concatenated and re-sorted by priority. That re-sort silently overrode
+   * whatever ordering had already been decided upstream — the closed-list
+   * `cmpClosedDesc` pass, and any column sort added later — because it ran
+   * last and unconditionally. Ordering belongs to the caller; this only
+   * decides which rows appear at top level.
+   *
+   * @param {Issue[]} ordered - Rows in final display order.
+   * @returns {{ rows: Issue[], epic_ids: Set<string> }}
+   */
+  function partitionForTree(ordered) {
     const epic_ids = new Set(
-      effective
+      ordered
         .filter((it) => String(it.issue_type || '') === 'epic')
         .map((it) => String(it.id))
     );
     /** @type {Issue[]} */
-    const epic_rows = [];
-    /** @type {Issue[]} */
-    const top_level_rows = [];
-    for (const it of effective) {
-      const is_epic = String(it.issue_type || '') === 'epic';
-      if (is_epic) {
-        epic_rows.push(it);
+    const rows = [];
+    for (const it of ordered) {
+      if (String(it.issue_type || '') === 'epic') {
+        rows.push(it);
         continue;
       }
       const parent = String(/** @type {any} */ (it).parent || '');
       if (parent && epic_ids.has(parent)) {
-        continue; // Hidden — will appear under its epic if expanded
+        continue; // Hidden — appears under its epic when that epic is expanded
       }
-      top_level_rows.push(it);
+      rows.push(it);
     }
-    return { epic_rows, top_level_rows, epic_ids };
+    return { rows, epic_ids };
   }
 
   /**
@@ -501,7 +516,13 @@ export function createListView(
         type_filters.includes(String(it.issue_type || ''))
       );
     }
-    // Sorting: closed list is a special case → sort by closed_at desc only
+    // Expanded epics rejoin the list before it is ordered, so they sort with
+    // everything else rather than landing wherever recovery found them.
+    filtered = recoverExpandedEpics(filtered, issues_cache);
+
+    // Sorting: the list arrives from `selectIssuesFor` already in
+    // priority-then-created order, so the only special case is the closed
+    // list, which is ordered by when things closed instead.
     if (
       stored_status_filters.length === 1 &&
       stored_status_filters[0] === 'closed'
@@ -509,21 +530,9 @@ export function createListView(
       filtered = filtered.slice().sort(cmpClosedDesc);
     }
 
-    const { epic_rows, top_level_rows } = partitionForTree(
-      filtered,
-      issues_cache
-    );
-
-    // Merge epics and non-epic top-level rows by the existing priority/created sort.
-    const merged = [...epic_rows, ...top_level_rows].sort((a, b) => {
-      const pa = a.priority ?? 2;
-      const pb = b.priority ?? 2;
-      if (pa !== pb) return pa - pb;
-      const ca = /** @type {any} */ (a).created_at ?? 0;
-      const cb = /** @type {any} */ (b).created_at ?? 0;
-      if (ca !== cb) return ca < cb ? -1 : 1;
-      return String(a.id) < String(b.id) ? -1 : 1;
-    });
+    // Order is settled above. The partition only removes the rows that render
+    // nested under an epic; it must not reorder what is left.
+    const { rows: merged } = partitionForTree(filtered);
 
     /** @type {import('lit-html').TemplateResult<1>[]} */
     const rows_array = [];
